@@ -1,4 +1,4 @@
-# DDSync (standalone)
+# DDSync
 
 DDSync synchronizes differential travel times from a large `dt.cc` file by solving a **per station–phase graph synchronization** problem:
 
@@ -7,6 +7,8 @@ DDSync synchronizes differential travel times from a large `dt.cc` file by solvi
 - Output: a node potential `theta` such that `theta(i) - theta(j)` best matches all observed `dt(i,j)` (weighted, robust)
 
 It is designed to be **scalable** to very large `dt.cc` files via streaming + per-(station,phase) processing.
+
+Tested on Matlab2013b
 
 ---
 
