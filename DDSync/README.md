@@ -8,7 +8,7 @@ DDSync synchronizes differential travel times from a large `dt.cc` file by solvi
 
 It is designed to be **scalable** to very large `dt.cc` files via streaming + per-(station,phase) processing.
 
-Tested on Matlab2013b
+Tested on Matlab2013b.
 
 ---
 
@@ -16,10 +16,8 @@ Tested on Matlab2013b
 
 1. Put this folder on your MATLAB path (add the parent folder that contains `+ddsync/`).
 2. Create a parameter file:
-
-- Copy `ddsync_params_template.m` to `ddsync_params.m`
-- Edit the input/output paths
-
+   - Copy `ddsync_params_template.m` to `ddsync_params.m`
+   - Edit the input/output paths
 3. Run:
 
 ```matlab
@@ -34,6 +32,25 @@ cfg.io.infile_dt    = 'dt.cc';
 cfg.io.catalog_file = 'catalog.txt';
 out = ddsync.run(cfg);
 ```
+
+---
+
+## Requirements
+
+- MATLAB (tested with R2013b).
+- No additional toolboxes are known to be required. DDSync uses base MATLAB functionality (sparse matrices, `chol`, `pcg`, `containers.Map`, etc.). If you hit a missing-function error, please report it and note your MATLAB version.
+
+---
+
+## Directory layout
+
+- `+ddsync/` — main package code.
+- `run_ddsync.m` — wrapper that loads `ddsync_params.m` and calls DDSync.
+- `run_ddsync_example.m` — example script with common options (commented out).
+- `ddsync_params_template.m` — parameter file template.
+- `dt.cc`, `catalog.txt` — example data (Spanish Springs example from Trugman & Shearer, 2017).
+- `sync_metrics.txt` — example metrics output (see below).
+- `extras/` — helper scripts (reindexing/reordering, compressed variant).
 
 ---
 
@@ -58,6 +75,8 @@ STA  dt  cc  PH
   - `dt` differential time (seconds)
   - `cc` correlation coefficient or quality value (float)
   - `PH` phase label (string, e.g. `P`, `S`)
+
+**Important:** Event IDs must be contiguous `1..N`. If your catalog uses arbitrary IDs, reindex them first (see `extras/reindext_dtcc.m` and `extras/reorder.m`).
 
 ### 2) `catalog.txt`
 
@@ -101,7 +120,22 @@ A pruned + synchronized `dt.cc` file (same structure) where:
 
 ### 4) `sync_metrics.txt`
 
-A small metrics file including total edges/kept and whether pseudo-std was used.
+A metrics summary with per-station/phase statistics and overall counts.
+
+Header fields (second line) echo key config values. Each data row is:
+
+```
+group    n_edges  n_kept  pruned_pct  robust_p50  robust_p05  robust_p95  frac_robust_lt_0p99  sigma_hat
+```
+
+- `group` — station + phase key (e.g., `DYN_P`)
+- `n_edges` / `n_kept` — total edges and edges kept after pruning
+- `pruned_pct` — percent of edges removed
+- `robust_p50/p05/p95` — robust weight percentiles (after IRLS)
+- `frac_robust_lt_0p99` — fraction of edges downweighted below 0.99
+- `sigma_hat` — robust scale estimate (seconds)
+
+The end of the file includes `overall_*` totals and flags indicating whether pseudo-std was used.
 
 ---
 
@@ -144,6 +178,38 @@ See `+ddsync/config_default.m` for full details.
 
 ---
 
+## Example: richer configuration (all optional)
+
+The default config is intentionally conservative. You can enable or change any of these:
+
+```matlab
+cfg = ddsync.config_default();
+
+% I/O
+cfg.io.infile_dt    = 'dt.cc';
+cfg.io.catalog_file = 'catalog.txt';
+cfg.io.out_dt_sync  = 'dt_sync.cc';
+cfg.io.metrics_file = 'sync_metrics.txt';
+cfg.io.tmpdir       = 'ddsync_tmp'; % put on fast local disk for large jobs
+
+% Weights
+% cfg.weights.base_fun = 'cc2'; % use cc^2 instead of cc
+
+% Robust pruning / IRLS
+% cfg.robust.k_sigma    = 8;    % prune if |residual| > K_SIGMA * sigma_hat
+% cfg.robust.min_edges  = 30;   % minimum edges per component
+% cfg.robust.irls_iters = 10;   % IRLS iterations (0 disables)
+
+% Std/weight export
+% cfg.std.mode     = 'pseudo_degree'; % fastest; avoids Hutchinson
+% cfg.std.fallback = 'pseudo_degree';
+
+% Output weights in dt_sync.cc
+% cfg.output.dt_weight_mode = 'thetaStd'; % 'base'|'robust'|'combined'|'thetaStd'
+```
+
+---
+
 ## Performance notes
 
 - DDSync performs:
@@ -162,4 +228,3 @@ See `+ddsync/config_default.m` for full details.
 ## Contact / citation
 
 This repository is intended to accompany a DDSync manuscript in preparation. Please cite the associated publication/preprint when available.
-
