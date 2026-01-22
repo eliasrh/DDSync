@@ -59,7 +59,7 @@ STA  dt  cc  PH
 
 ### 2) `catalog.txt`
 
-DDSync only uses the catalog to determine `maxEventID`. The catalog must contain event IDs in the first column.
+DDSync only uses the catalog to determine `maxEventID`. The catalog must contain event IDs in the last column.
 
 ---
 
