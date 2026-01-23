@@ -723,7 +723,7 @@ function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full
                 aa = a(kept_for_nodew); bb = b(kept_for_nodew);
                 switch lower(string(PSEUDO_WEIGHT_SOURCE))
                     case "base"
-                        ww = w_base_c(kept_for_nodew);
+                        ww = wb_k(kept_for_nodew);
                     case "robust"
                         ww = wrob_c(kept_for_nodew);
                     otherwise % 'combined'
