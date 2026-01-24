@@ -1,0 +1,82 @@
+# ddsync_config_template.toml
+#
+# Copy to "ddsync_config.toml" and edit.
+# The runner (run_ddsync.jl) will automatically load ddsync_config.toml if present,
+# or you can pass a TOML file explicitly:
+#   julia run_ddsync.jl myconfig.toml
+#   julia run_ddsync.jl myconfig.toml dt.cc catalog.txt
+#
+# Any fields you omit will fall back to DDSync.config_default().
+
+[io]
+# infile_dt = "dt.cc"
+# catalog_file = "catalog.txt"
+# tmpdir = "synchro_tmp"
+# thetadir = "theta"
+# thetastd_dir = "thetastd"
+# metrics_file = "sync_metrics.txt"
+# out_dt_sync = "dt_sync.cc"
+
+[weights]
+# Base weight from dt.cc "cc" column
+# base_mode = "cc"      # "cc" | "cc2" | "ones"
+
+[robust]
+# K_SIGMA = 20.0
+# MIN_EDGES = 30
+
+[irls]
+# iters = 10
+# C_HUBER = 1.345
+# rel_tol = 1e-3
+
+[numeric]
+# RIDGE_EPS = 1e-10
+
+[output]
+# weight_mode = "thetaStd"     # "base" | "robust" | "combined" | "thetaStd"
+# write_pruned_edges = false
+#
+# thetaStd scaling (only used when weight_mode = "thetaStd")
+# thetastd_scale_mode = "fixed"   # "fixed" | "median"
+# thetastd_scale_fixed = 500.0
+# thetastd_weight_cap = 1.0
+#
+# Formatting (match MATLAB standalone defaults as needed)
+# dt_decimals = 5
+# dt_weight_decimals = 4
+# station_field_width = 8
+# dt_field_width = 10
+# weight_field_width = 8
+
+[std]
+export = true
+mode = "hutch"                 # "hutch" | "pseudo_degree" | "pseudo_weight" | "none"
+fallback = "pseudo_degree"     # used if hutch is skipped (e.g., probes=0 or too large system)
+
+# Enable Hutchinson by setting probes > 0.
+# NOTE: This can be expensive for large station-phase groups.
+probes = 10000
+probe_dist = "rademacher"       # "rademacher" | "gaussian"
+
+batch = 250
+report_every_batch = 10
+max_nred = 40000
+min_sigma = 5e-4
+min_diag_rel = 1e-12
+
+# For pseudo_weight (and optional alt column): per-node weight estimated from incident edges.
+# pseudo_weight_source = "combined"   # "base" | "robust" | "combined"
+# pseudo_weight_eps = 0.05
+
+# Columns written to std_theta files
+# thetastd_write_weightcol = true
+# thetastd_write_alt_node_weightcol = false
+
+[runtime]
+# Memory policy: dense arrays like MATLAB (fast, memory heavy) vs sparse Dict (memory light)
+# store_dense_group_arrays = false
+
+prog_every_lines = 2000000
+# decision_chunk_records = 200000
+# median_scale_cap = 2000000
