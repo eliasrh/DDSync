@@ -1,30 +1,30 @@
-# DDSync
+# DDSync (MATLAB)
 
-DDSync synchronizes differential travel times from a large `dt.cc` file by solving a **per station–phase graph synchronization** problem:
+DDSync synchronizes differential travel times from a large `dt.cc` file by solving a **per-station / per-phase graph synchronization** problem:
 
 - Nodes: events
 - Edges: observed differential travel time `dt(i,j)` for a given station and phase
-- Output: a node potential `theta` such that `theta(i) - theta(j)` best matches all observed `dt(i,j)` (weighted, robust)
+- Output: node potential `theta` such that `theta(i) - theta(j)` best matches the observed `dt(i,j)` (weighted, robust)
 
-It is designed to be **scalable** to very large `dt.cc` files via streaming + per-(station,phase) processing.
+DDSync is designed to be **scalable** to very large `dt.cc` files via streaming + per-(station,phase) processing (two-pass I/O).
 
-Tested on Matlab2013b.
+Tested on MATLAB R2013b (should work on newer versions).
 
 ---
 
-## Quick start
+## Quick start (minimal)
 
-1. Put this folder on your MATLAB path (add the parent folder that contains `+ddsync/`).
-2. Create a parameter file:
-   - Copy `ddsync_params_template.m` to `ddsync_params.m`
-   - Edit the input/output paths
-3. Run:
+1. Add this folder to your MATLAB path (add the parent folder that contains `+ddsync/`).
+2. Copy the parameter template:
+   - `ddsync_params_template.m` → `ddsync_params.m`
+3. Edit `ddsync_params.m` with your input/output paths.
+4. Run:
 
 ```matlab
 run_ddsync
 ```
 
-Or directly:
+Or directly in MATLAB:
 
 ```matlab
 cfg = ddsync.config_default();
@@ -37,28 +37,28 @@ out = ddsync.run(cfg);
 
 ## Requirements
 
-- MATLAB (tested with R2013b).
-- No additional toolboxes are known to be required. DDSync uses base MATLAB functionality (sparse matrices, `chol`, `pcg`, `containers.Map`, etc.). If you hit a missing-function error, please report it and note your MATLAB version.
+- MATLAB (tested on R2013b; expected to work on newer versions).
+- No extra toolboxes are required. DDSync uses base MATLAB functionality (sparse matrices, `chol`, `pcg`, `containers.Map`, etc.).
 
 ---
 
 ## Directory layout
 
-- `+ddsync/` — main package code.
+- `+ddsync/` — core package code.
 - `run_ddsync.m` — wrapper that loads `ddsync_params.m` and calls DDSync.
-- `run_ddsync_example.m` — example script with common options (commented out).
+- `run_ddsync_example.m` — example script with common options (commented).
 - `ddsync_params_template.m` — parameter file template.
-- `dt.cc`, `catalog.txt` — example data (Spanish Springs example from Trugman & Shearer, 2017).
-- `sync_metrics.txt` — example metrics output (see below).
+- `dt.cc`, `catalog.txt` — example data (Spanish Springs sequence; Trugman & Shearer, 2017).
+- `sync_metrics.txt` — example metrics output.
 - `extras/` — helper scripts (reindexing/reordering, compressed variant).
 
 ---
 
-## Inputs
+## Input files (explicit formats)
 
-### 1) `dt.cc` format
+### 1) `dt.cc`
 
-DDSync expects a hypoDD/GrowClust-like `dt.cc` file with blocks:
+DDSync expects a HypoDD/GrowClust-style `dt.cc` file with blocks like:
 
 ```
 # i j 0.0
@@ -69,53 +69,55 @@ STA  dt  cc  PH
 ...
 ```
 
-- `i`, `j` are integer event IDs (1-based).
-- Data lines contain:
-  - `STA` station code (string)
-  - `dt` differential time (seconds)
-  - `cc` correlation coefficient or quality value (float)
-  - `PH` phase label (string, e.g. `P`, `S`)
+- `i`, `j` are **integer event IDs**.
+- The `0.0` in the header line is ignored (can be any float).
+- Data line fields (space-separated):
+  - `STA` — station code (string)
+  - `dt` — differential time (seconds)
+  - `cc` — correlation coefficient or quality value (float)
+  - `PH` — phase label (string, e.g., `P`, `S`)
 
 **Important:** Event IDs must be contiguous `1..N`. If your catalog uses arbitrary IDs, reindex them first (see `extras/reindext_dtcc.m` and `extras/reorder.m`).
 
 ### 2) `catalog.txt`
 
-DDSync only uses the catalog to determine `maxEventID`. The catalog must contain event IDs in the last column.
+DDSync only uses the catalog to determine `maxEventID`. The catalog must contain event IDs in the **last column**. If your catalog format differs, edit `ddsync.readCatalogIDs` inside `+ddsync/` to match your format.
 
 ---
 
-## Outputs
+## Output files
 
 ### 1) `theta/theta_<STA>_<PH>.txt`
 
-Per station–phase node potentials (one value per event ID):
+Per station–phase node potentials (one value per event ID). Columns:
 
-Columns:
 1. `EventID`
 2. `theta` (seconds) — NaN if event not present in the group
-3. `refEventID` (the reference event ID for that connected component)
+3. `refEventID` (reference event ID for that connected component)
 
 ### 2) `thetastd/std_theta_<STA>_<PH>.txt`
 
-Per station–phase uncertainty/weight metadata.
+Per station–phase uncertainty/weight metadata. Default columns:
 
-Default columns:
 1. `EventID`
-2. `std_theta` (seconds) — may be true (Hutch) or pseudo (fallback)
+2. `std_theta` (seconds) — true Hutchinson or pseudo (fallback)
 3. `refEventID`
 4. `degree` (graph degree within the kept component)
 
-Optional extra columns (enabled by default):
-5. `thetaWeight = min(cap, (1/std_theta)/theta_weight_scale_fixed)`
+Optional columns (enabled by default):
 
-Optional extra column (disabled by default):
+5. `thetaWeight = min(cap, (1/std_theta) / theta_weight_scale_fixed)`
+
+Optional column (disabled by default):
+
 6. `nodeWeight` — aggregated node weight used by pseudo-weight mode.
 
 ### 3) `dt_sync.cc`
 
-A pruned + synchronized `dt.cc` file (same structure) where:
-- outliers are removed (weight written as 0)
-- `dt` is replaced by `theta(i)-theta(j)` for kept edges
+A pruned + synchronized `dt.cc` file (same block structure) where:
+
+- outliers are removed (weight written as 0 if `write_pruned_edges = true`)
+- `dt` is replaced by `theta(i) - theta(j)` for kept edges
 - the third column is a **user-selected weight** via `cfg.output.dt_weight_mode`
 
 ### 4) `sync_metrics.txt`
@@ -144,13 +146,16 @@ The end of the file includes `overall_*` totals and flags indicating whether pse
 True uncertainty estimation of `theta` can be expensive for large components. DDSync supports:
 
 ### Hutchinson estimator (`cfg.std.mode = 'hutch'`)
+
 Estimates `diag(inv(L))` stochastically for each connected component of a station–phase graph, then converts to `std(theta)`.
 
-This is controlled by:
+Controlled by:
+
 - `cfg.std.hutch.probes`
 - `cfg.std.hutch.max_nred` (skips large components)
 
-### Pseudo-std fallback (NEW)
+### Pseudo-std fallback
+
 If Hutch is skipped (too large / disabled), DDSync can write a **pseudo std** instead of NaNs:
 
 - `cfg.std.fallback = 'pseudo_degree'` (default)
@@ -166,21 +171,19 @@ DDSync prints warnings when pseudo std is used and records counts in `sync_metri
 
 ---
 
-## Key configuration fields (high level)
+## Key configuration fields (plain-language summary)
 
-- `cfg.io.*` : input/output paths, temp dir, progress
-- `cfg.weights.*` : base weight from CC (`cc`, `cc^2`, or uniform)
-- `cfg.robust.*` : pruning + IRLS (Huber) controls
-- `cfg.std.*` : thetastd export mode and Hutch/pseudo settings
-- `cfg.output.*` : dt_sync weight mode and scaling
+- `cfg.io.*` — input/output paths, temp dir, progress logging.
+- `cfg.weights.*` — base weights derived from `cc` (`cc`, `cc^2`, or uniform).
+- `cfg.robust.*` — pruning threshold (`k_sigma`), minimum edges, IRLS controls.
+- `cfg.std.*` — whether to export std, and which estimator (Hutchinson vs. pseudo).
+- `cfg.output.*` — formatting + which weight is written to `dt_sync.cc`.
 
-See `+ddsync/config_default.m` for full details.
+See `+ddsync/config_default.m` for all defaults and descriptions.
 
 ---
 
 ## Example: richer configuration (all optional)
-
-The default config is intentionally conservative. You can enable or change any of these:
 
 ```matlab
 cfg = ddsync.config_default();
@@ -219,12 +222,25 @@ cfg.io.tmpdir       = 'ddsync_tmp'; % put on fast local disk for large jobs
 
 - Place `cfg.io.tmpdir` on a fast local SSD for large catalogs.
 
-- If Hutch is too slow or too memory intensive:
+- If Hutchinson is too slow or too memory intensive:
   - set `cfg.std.mode = 'pseudo_degree'` (fastest)
   - or reduce `cfg.std.hutch.probes`
 
 ---
 
-## Contact / citation
+## Example data (Spanish Springs)
 
-This repository is intended to accompany a DDSync manuscript in preparation. Please cite the associated publication/preprint when available.
+This MATLAB folder includes example `dt.cc` and `catalog.txt` from the Spanish Springs sequence (Trugman & Shearer, 2017). The IDs have been made sequential and lightly filtered for demonstration. The Julia version does **not** include these files, but it reads the same formats.
+
+---
+
+## References / citation
+
+- Trugman, D. T., & Shearer, P. M. (2017). *GrowClust: A hierarchical clustering algorithm for relative earthquake relocation, with application to the Spanish Springs and Sheldon, Nevada, earthquake sequences.* **Seismological Research Letters**, 88(2A), 379–391.
+- Heimisson, E. R., et al. (2026, in preparation). *Graph-based denoising of differential travel-time observations with applications to pick reconstruction and a path-difference tomography formulation.*
+
+---
+
+## License (non-commercial)
+
+DDSync is licensed for **non-commercial** research and educational use only. Commercial or for-profit use (including internal commercial workflows) requires a separate written licensing agreement with the author. See `../LICENSE` for full terms.

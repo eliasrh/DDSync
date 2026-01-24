@@ -86,10 +86,9 @@ function config_default()
         :min_sigma                        => 5e-4,
         :min_diag_rel                     => 1e-12,
         :pseudo_weight_source             => "combined",      # "base" | "robust" | "combined"
-        :pseudo_weight_eps                => 0.05,
+        :pseudo_weight_eps                => 1e-6,
         :thetastd_write_weightcol         => true,
         :thetastd_write_alt_node_weightcol => false,
-        :thetastd_fallback_weight_scale   => 1000.0,          # shared with output.thetastd_scale_fixed by default
     )
 
     cfg[:runtime] = Dict{Symbol,Any}(
@@ -189,8 +188,6 @@ function run(cfg::Dict{Symbol,Any}=config_default())
     PSEUDO_WEIGHT_EPS    = Float64(std_cfg[:pseudo_weight_eps])
     WRITE_THETASTD_WEIGHTCOL = Bool(std_cfg[:thetastd_write_weightcol])
     WRITE_THETASTD_ALT_NODEW_COL = Bool(std_cfg[:thetastd_write_alt_node_weightcol])
-    THETASTD_FALLBACK_WEIGHT_SCALE = Float64(std_cfg[:thetastd_fallback_weight_scale])
-
     # Runtime
     store_dense = Bool(rt_cfg[:store_dense_group_arrays])
     decision_chunk = Int(rt_cfg[:decision_chunk_records])
@@ -844,7 +841,7 @@ function writeThetaStdWithDegree(fn::String, maxEventID::Int,
     deg_local::Vector{Int}, nodew_local::Vector{Float64};
     write_weightcol::Bool=true,
     write_alt_nodew_col::Bool=false,
-    thetastd_scale_fixed::Float64=1000.0,
+    thetastd_scale_fixed::Float64=500.0,
     thetastd_weight_cap::Float64=1.0)
 
     open(fn, "w") do io
