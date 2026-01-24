@@ -1,25 +1,29 @@
 # DDSync (Julia)
 
-This is a **Julia** implementation of the DDSync standalone MATLAB package (two-pass streaming, per-(station,phase) spooling).
+This is the **Julia** implementation of the DDSync standalone MATLAB package. It performs two-pass streaming over large `dt.cc` files and solves per-(station,phase) graph synchronization problems.
 
 Goals:
 
 - **Easy setup**: no non-stdlib Julia packages.
-- **Memory-safe** on huge `dt.cc` files: stream + spool; do not load the whole `dt.cc` into RAM.
+- **Memory-safe** for huge `dt.cc` files: stream + spool; do not load the whole `dt.cc` into RAM.
 - **Output formats** intended to match the MATLAB standalone package:
   - `dt_sync.cc` (HypoDD-style)
   - `theta/theta_STA_PH.txt`
   - `thetastd/std_theta_STA_PH.txt`
   - `sync_metrics.txt`
 
-> **Note:** This is intended to be a readable, functional reference implementation rather than the fastest possible code.
+> **Note:** This Julia version is generally faster than MATLAB, and it provides a dense vs. sparse storage option for pass-2 output writing.
+
+---
 
 ## Requirements
 
-- Julia (recommended: 1.9+; should work on 1.8+)
-- No extra packages
+- Julia **1.9+** recommended (should work on 1.8+)
+- No extra packages (only stdlib)
 
-## Quick start
+---
+
+## Quick start (minimal)
 
 Place `dt.cc` and `catalog.txt` in the same directory, then run:
 
@@ -41,47 +45,50 @@ Outputs:
 - `thetastd/` (if `cfg[:std][:export] = true`)
 - temporary spool/decision files under `synchro_tmp/`
 
-## Configuration
+---
+
+## Configuration (fool-proof)
 
 Preferred: use a **TOML config file**. Copy `ddsync_config_template.toml` to `ddsync_config.toml` and edit.
-`run_ddsync.jl` will automatically load `ddsync_config.toml` if it exists, or you can pass a TOML file as the first argument:
+`run_ddsync.jl` will automatically load `ddsync_config.toml` if it exists, or you can pass a TOML file explicitly:
 
 ```bash
-cp ddsync_config_template.toml ddsync_config.toml 
-```
-Edit the configuration file as needed
-```bash
+cp ddsync_config_template.toml ddsync_config.toml
 julia run_ddsync.jl myconfig.toml
 julia run_ddsync.jl myconfig.toml dt.cc catalog.txt
 ```
 
 You can also modify the dictionary returned by `DDSync.config_default()` directly in `run_ddsync.jl`.
 
-Key options mirror the MATLAB standalone config:
+### Key options (plain language)
 
-- `cfg[:weights][:base_mode]` = `"cc"` | `"cc2"` | `"ones"`
-- `cfg[:robust][:K_SIGMA]`
-- `cfg[:robust][:MIN_EDGES]`
-- `cfg[:irls][:iters]`, `cfg[:irls][:C_HUBER]`
-- `cfg[:output][:weight_mode]` = `"base"` | `"robust"` | `"combined"` | `"thetaStd"`
-- `cfg[:std][:mode]` = `"hutch"` | `"pseudo_degree"` | `"pseudo_weight"` | `"none"`
-- `cfg[:std][:probes]` (set >0 to enable Hutchinson; can be slow)
+These mirror the MATLAB standalone config defaults:
 
-### Memory policy
+- `cfg[:io]` — input/output paths, temp directory, progress logging
+- `cfg[:weights][:base_mode]` — base weights from the `cc` column (`"cc"`, `"cc2"`, or `"ones"`)
+- `cfg[:robust]` — pruning threshold (`K_SIGMA`) and minimum edges per component (`MIN_EDGES`)
+- `cfg[:irls]` — IRLS iteration count and Huber constant (`C_HUBER`)
+- `cfg[:std]` — standard-deviation export: Hutchinson vs. pseudo
+- `cfg[:output]` — which weight is written to `dt_sync.cc` and formatting options
 
-The MATLAB standalone package stores full `theta_full`/`std_full` arrays per group for fast pass-2 writing, but this can be very memory-heavy for large catalogs.
+### Dense vs. sparse storage (memory policy)
+
+The MATLAB package stores per-group `theta`/`std` as **dense arrays** for fast pass-2 output. This can be memory-heavy for large catalogs.
 
 In Julia you can choose:
 
-- `cfg[:runtime][:store_dense_group_arrays] = true`  
-  (MATLAB-like: fast in pass 2, potentially large RAM use)
+- `cfg[:runtime][:store_dense_group_arrays] = true`
+  - MATLAB-like: fast pass 2, high RAM usage
+- `cfg[:runtime][:store_dense_group_arrays] = false` *(default)*
+  - Memory-light: stores `Dict{EventID => value}` per group, slower pass 2
 
-- `cfg[:runtime][:store_dense_group_arrays] = false` *(default)*  
-  Store sparse `Dict{EventID => value}` per group (lower RAM, slower pass 2)
+---
 
-## Input format (dt.cc)
+## Input files (explicit formats)
 
-HypoDD style:
+### 1) `dt.cc`
+
+HypoDD/GrowClust-style blocks:
 
 ```
 # i j 0.0
@@ -92,25 +99,64 @@ STA  dt  cc  S
 ...
 ```
 
-Only the first 4 whitespace-separated fields on station lines are used.
+- `i`, `j` are integer event IDs.
+- The `0.0` in the header line is ignored.
+- Only the first 4 whitespace-separated fields on station lines are used.
 
-## Output formats
+**Important:** Event IDs must be contiguous `1..N`. Reindex if needed (see the MATLAB `extras/` scripts for a reference approach).
 
-`dt_sync.cc` station-line formatting follows the MATLAB standalone package (field widths/decimals controlled by `cfg[:output]`).
+### 2) `catalog.txt`
 
-Theta file:
+DDSync only uses the catalog to determine `maxEventID`. The catalog must contain event IDs in the **last column**.
+
+---
+
+## Output files
+
+### `theta/theta_STA_PH.txt`
 
 ```
 EventID theta refEventID
 ```
 
-Std-theta file (tab-separated; optional weight column):
+### `thetastd/std_theta_STA_PH.txt`
+
+Tab-separated (optional columns controlled by config):
 
 ```
 EventID   std_theta   refEventID   degree   [w_theta]   [node_weight]
 ```
 
+### `dt_sync.cc`
+
+A synchronized `dt.cc` with pruned outliers removed. The third column is the selected weight mode (`base`, `robust`, `combined`, or `thetaStd`).
+
+### `sync_metrics.txt`
+
+Summary metrics per station–phase group and overall counts.
+
+---
+
 ## Notes / limitations
 
-- Hutchinson (`cfg[:std][:mode]="hutch"`, `cfg[:std][:probes]>0`) is **computationally expensive**.
-- For very large groups, processing a single station-phase can still require substantial RAM (edges must be loaded for that group).
+- Hutchinson (`cfg[:std][:mode] = "hutch"`, `cfg[:std][:probes] > 0`) can be **computationally expensive**.
+- For very large groups, processing a single station-phase can still require substantial RAM (edges for that group are held in memory).
+
+---
+
+## Example data
+
+The example Spanish Springs dataset (Trugman & Shearer, 2017) is included only in the MATLAB folder (`DDSync/`). This Julia package reads the same `dt.cc` and `catalog.txt` formats but does not bundle the files.
+
+---
+
+## References / citation
+
+- Trugman, D. T., & Shearer, P. M. (2017). *GrowClust: A hierarchical clustering algorithm for relative earthquake relocation, with application to the Spanish Springs and Sheldon, Nevada, earthquake sequences.* **Seismological Research Letters**, 88(2A), 379–391.
+- Heimisson, E. R., et al. (2026, in preparation). *Graph-based denoising of differential travel-time observations with applications to pick reconstruction and a path-difference tomography formulation.*
+
+---
+
+## License (non-commercial)
+
+DDSync is licensed for **non-commercial** research and educational use only. Commercial or for-profit use (including internal commercial workflows) requires a separate written licensing agreement with the author. See `../LICENSE` for full terms.
