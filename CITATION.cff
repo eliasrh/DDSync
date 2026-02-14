@@ -1,0 +1,56 @@
+cff-version: 1.2.0
+message: "If you use DDSync in your research, please cite the software using the citation below."
+title: "DDSync: Graph-based denoising of differential travel-time observations"
+type: software
+authors:
+  - family-names: "Heimisson"
+    given-names: "Elías Rafn"
+    affiliation: "Institute of Earth Sciences, University of Iceland"
+    orcid: "https://orcid.org/0000-0001-8342-7226"   # optional
+repository-code: "https://github.com/eliasrh/DDSync"
+url: "https://github.com/eliasrh/DDSync"
+
+# Use a custom LicenseRef if you're using a nonstandard/non-OSI license.
+# Make sure this matches your LICENSE file wording.
+license: "LicenseRef-DDSync-NonCommercial-1.0"
+
+# Update these to match your GitHub release + Zenodo record:
+version: "0.1.0"
+date-released: "2026-02-14"
+doi: "10.5281/zenodo.XXXXXXXX"  # <-- version DOI for this release
+
+keywords:
+  - seismology
+  - earthquake relocation
+  - double-difference
+  - HypoDD
+  - GrowClust
+  - differential travel times
+  - graph synchronization
+  - robust estimation
+
+abstract: >
+  DDSync is a lightweight graph-based synchronization/denoising tool for HypoDD/GrowClust-style
+  dt.cc differential travel-time observations. For each station–phase, it solves a weighted
+  least-squares synchronization problem to recover self-consistent relative arrival-time potentials,
+  provides residual-based pruning using MAD thresholds, supports optional Huber IRLS reweighting,
+  and can export thetaStd-based uncertainty diagnostics for downstream weighting.
+
+# Optional: include both the concept DOI (all versions) and the version DOI (this release).
+# identifiers:
+#   - type: doi
+#     value: 10.5281/zenodo.XXXXXXXX  # version DOI
+#   - type: doi
+#     value: 10.5281/zenodo.YYYYYYYY  # concept DOI (all versions)
+
+preferred-citation:
+  type: software
+  authors:
+    - family-names: "Heimisson"
+      given-names: "Elías Rafn"
+      affiliation: "Institute of Earth Sciences, University of Iceland"
+  title: "DDSync: Graph-based denoising of differential travel-time observations"
+  version: "0.1.0"
+  date-released: "2026-02-14"
+  doi: "10.5281/zenodo.18642126"      # <-- version DOI
+  url: "https://github.com/eliasrh/DDSync"
