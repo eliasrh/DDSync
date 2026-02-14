@@ -18,8 +18,9 @@ Goals:
 
 ## Requirements
 
-- Julia **1.9+** recommended (should work on 1.8+)
-- No extra packages (only stdlib)
+- Julia version: DDSyncJulia is tested on Julia 1.12.x (Homebrew build).
+- It should run on nearby Julia releases, but if you encounter issues, please try Julia 1.12.x.
+- It uses no extra packages (only stdlib)
 
 ---
 
@@ -47,10 +48,12 @@ Outputs:
 
 ---
 
-## Configuration (fool-proof)
+## Configuration 
 
 Preferred: use a **TOML config file**. Copy `ddsync_config_template.toml` to `ddsync_config.toml` and edit.
-`run_ddsync.jl` will automatically load `ddsync_config.toml` if it exists, or you can pass a TOML file explicitly:
+`run_ddsync.jl` will automatically load `ddsync_config.toml` if it exists, or you can pass a TOML file explicitly.
+It will load files `dt.cc` and `catalog.txt` automatically, but you can also pass these directly if they have other names
+See examples:
 
 ```bash
 cp ddsync_config_template.toml ddsync_config.toml
