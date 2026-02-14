@@ -26,13 +26,14 @@ Both versions aim to match **default parameter values** and **output formats**. 
 
 ## Example data (MATLAB only)
 
-The MATLAB folder includes example `dt.cc` and `catalog.txt` from the Spanish Springs sequence (Trugman & Shearer, 2017). The event IDs have been made sequential and lightly filtered for demonstration. The Julia version does **not** include these files, but it reads the same formats.
+The MATLAB folder includes example `dt.cc` and `catalog.txt` from the Spanish Springs sequence (Trugman & Shearer, 2017: https://github.com/dttrugman/GrowClust). The event IDs have been made sequential and lightly filtered for demonstration. The Julia version does **not** include these files, but it reads the same formats.
 
 ## References
 
+- Heimisson, E. R., Yu, Y. (2026, in preparation). *Graph-based denoising of differential travel-time observations with applications to pick reconstruction and path-difference tomography.*
 - Trugman, D. T., & Shearer, P. M. (2017). *GrowClust: A hierarchical clustering algorithm for relative earthquake relocation, with application to the Spanish Springs and Sheldon, Nevada, earthquake sequences.* **Seismological Research Letters**, 88(2A), 379–391.
-- Heimisson, E. R., et al. (2026, in preparation). *Graph-based denoising of differential travel-time observations with applications to pick reconstruction and a path-difference tomography formulation.*
+
 
 ## License (non-commercial)
 
-DDSync is licensed for **non-commercial** research and educational use only. Commercial or for-profit use (including internal commercial workflows) requires a separate written licensing agreement with the author. See `LICENSE` for full terms.
+DDSync is licensed for **non-commercial** research and educational use only. Commercial or for-profit use (including internal commercial workflows) requires a separate written licensing agreement with the author (eliasrafn@hi.is). See `LICENSE` for full terms.
