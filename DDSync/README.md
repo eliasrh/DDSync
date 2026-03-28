@@ -8,7 +8,7 @@ DDSync synchronizes differential travel times from a large `dt.cc` file by solvi
 
 DDSync is designed to be **scalable** to very large `dt.cc` files via streaming + per-(station,phase) processing (two-pass I/O).
 
-Tested on MATLAB R2013b (should work on newer versions).
+Tested on MATLAB R2023b (should work on newer versions).
 
 ---
 
