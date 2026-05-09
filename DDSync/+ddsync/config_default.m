@@ -44,6 +44,8 @@ cfg.output.dt_weight_mode         = 'thetaStd'; % 'base'|'robust'|'combined'|'th
 cfg.output.dt_weight_decimals     = 4;
 
 cfg.output.dt_decimals            = 5;   % decimals for dt values written to dt_sync
+cfg.output.theta_decimals         = 9;   % decimals for theta values written to theta_*.txt
+cfg.output.thetastd_decimals      = 9;   % decimals for std_theta values written to std_theta_*.txt
 cfg.output.station_field_width    = 8;   % station field width for aligned dt_sync output
 cfg.output.dt_field_width         = 10;  % dt numeric field width (includes sign)
 cfg.output.weight_field_width     = 8;   % weight numeric field width
