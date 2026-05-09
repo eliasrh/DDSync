@@ -1,5 +1,5 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% synchro.m  (authoritative DDSync script)
+% synchro.m  (older DDSync script)
 %
 % Purpose:
 %   Synchronize differential travel times (dt.cc) per station-phase by solving
@@ -100,7 +100,7 @@ DT_DECIMALS = 5;
 W_DECIMALS  = 4;
 
 % Temp folders
-TMPDIR = 'synchro_tmp';
+TMPDIR = 'ddsync_tmp';
 if ~exist(TMPDIR,'dir'), mkdir(TMPDIR); end
 THETASTD_DIR = 'thetastd';
 if EXPORT_THETA_STD && ~exist(THETASTD_DIR,'dir'), mkdir(THETASTD_DIR); end
