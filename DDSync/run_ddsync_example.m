@@ -33,4 +33,8 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % Optional: dt_sync weight mode
 % cfg.output.dt_weight_mode = 'thetaStd'; % 'base'|'robust'|'combined'|'thetaStd'
 
+% Example: preserve microsecond/sub-microsecond values in text outputs
+% cfg.output.theta_decimals = 12;
+% cfg.output.thetastd_decimals = 12;
+
 ddsync.run(cfg);
