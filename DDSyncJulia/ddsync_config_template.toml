@@ -24,6 +24,7 @@
 [robust]
 # K_SIGMA = 20.0
 # MIN_EDGES = 30
+# min_scale = 5e-4   # robust scale floor for pruning/IRLS only
 
 [irls]
 # iters = 10
@@ -62,7 +63,8 @@ probe_dist = "rademacher"       # "rademacher" | "gaussian"
 batch = 250
 report_every_batch = 10
 max_nred = 40000
-min_sigma = 5e-4
+min_sigma = 5e-4             # residual-noise floor for exported std_theta
+apply_min_sigma = true       # false (or min_sigma=0) disables the std_theta floor
 min_diag_rel = 1e-12
 
 # For pseudo_weight (and optional alt column): per-node weight estimated from incident edges.

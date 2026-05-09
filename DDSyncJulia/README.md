@@ -69,10 +69,20 @@ These mirror the MATLAB standalone config defaults:
 
 - `cfg[:io]` — input/output paths, temp directory, progress logging
 - `cfg[:weights][:base_mode]` — base weights from the `cc` column (`"cc"`, `"cc2"`, or `"ones"`)
-- `cfg[:robust]` — pruning threshold (`K_SIGMA`) and minimum edges per component (`MIN_EDGES`)
+- `cfg[:robust]` — pruning threshold (`K_SIGMA`), minimum edges per component (`MIN_EDGES`), and `min_scale` for zero/tiny robust residual scales
 - `cfg[:irls]` — IRLS iteration count and Huber constant (`C_HUBER`)
-- `cfg[:std]` — standard-deviation export: Hutchinson vs. pseudo
+- `cfg[:std]` — standard-deviation export: Hutchinson vs. pseudo, plus `min_sigma`/`apply_min_sigma` for the residual-noise floor used when exporting `std_theta`
 - `cfg[:output]` — which weight is written to `dt_sync.cc` and formatting options
+
+
+### Residual-scale floors
+
+Julia mirrors the MATLAB option names and semantics:
+
+- `cfg[:robust][:min_scale] = 5e-4` is only for robust pruning/IRLS scale estimates that are zero or too small.
+- `cfg[:std][:min_sigma] = 5e-4` with `cfg[:std][:apply_min_sigma] = true` is only for converting the final residual noise estimate into exported `std_theta` values. Set `apply_min_sigma = false` or `min_sigma = 0` to disable this export floor.
+
+Example: if `sigma_hat = 1e-5`, `min_sigma = 5e-4`, and `apply_min_sigma = true`, Hutchinson and `pseudo_degree` export use `5e-4` as the residual-noise scale before graph/degree conversion. `min_sigma` floors the residual noise estimate, not each output row in `std_theta_*.txt`.
 
 ### Dense vs. sparse storage (memory policy)
 

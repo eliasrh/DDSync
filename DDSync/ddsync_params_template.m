@@ -23,10 +23,13 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % cfg.robust.k_sigma    = 8;
 % cfg.robust.min_edges  = 30;
 % cfg.robust.irls_iters = 10;
+% cfg.robust.min_scale  = 5e-4; % robust scale floor for pruning/IRLS only
 
 % Example: disable expensive Hutch std and use pseudo-degree fallback
 % cfg.std.mode = 'pseudo_degree';
 % cfg.std.fallback = 'pseudo_degree';
+% cfg.std.min_sigma = 5e-4;       % residual-noise floor for exported std_theta
+% cfg.std.apply_min_sigma = true; % set false (or min_sigma=[]/0) to disable
 
 % Example: choose output dt weights
 % cfg.output.dt_weight_mode = 'thetaStd'; % 'base'|'robust'|'combined'|'thetaStd'

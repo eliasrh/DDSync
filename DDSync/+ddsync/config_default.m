@@ -33,6 +33,7 @@ cfg.robust.min_edges   = 30;     % minimum kept edges in a station-phase compone
 cfg.robust.irls_iters  = 10;     % IRLS iterations (0 disables IRLS)
 cfg.robust.huber_c     = 1.345;  % Huber tuning constant
 cfg.robust.irls_rel_tol= 1e-3;   % stop IRLS if relative change small
+cfg.robust.min_scale   = 5e-4;   % floor for zero/tiny robust residual scales during pruning/IRLS
 
 % ---------------- Numerical ----------------
 cfg.numeric.ridge_eps  = 1e-10;  % small Laplacian ridge for stability
@@ -84,7 +85,8 @@ cfg.std.hutch.batch             = 250;
 cfg.std.hutch.report_every_batch= 10;
 
 cfg.std.hutch.max_nred          = 40000;     % skip Hutch if reduced system larger than this
-cfg.std.hutch.min_sigma         = 5e-4;      % floor on sigma_hat (seconds)
+cfg.std.min_sigma               = 5e-4;      % floor on residual noise estimate when converting to std_theta
+cfg.std.apply_min_sigma         = true;      % false (or min_sigma=[]/0) disables exported std_theta floor
 cfg.std.hutch.min_diagrel       = 1e-12;     % floor on diag(inv(L)) relative to median(diag)
 
 end

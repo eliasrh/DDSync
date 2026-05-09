@@ -49,6 +49,7 @@ function config_default()
     cfg[:robust] = Dict{Symbol,Any}(
         :K_SIGMA => 20.0,
         :MIN_EDGES => 30,
+        :min_scale => 5e-4,
     )
 
     cfg[:irls] = Dict{Symbol,Any}(
@@ -84,6 +85,7 @@ function config_default()
         :report_every_batch               => 10,
         :max_nred                         => 40000,
         :min_sigma                        => 5e-4,
+        :apply_min_sigma                  => true,
         :min_diag_rel                     => 1e-12,
         :pseudo_weight_source             => "combined",      # "base" | "robust" | "combined"
         :pseudo_weight_eps                => 1e-6,
@@ -158,6 +160,7 @@ function run(cfg::Dict{Symbol,Any}=config_default())
     # Robust params
     K_SIGMA   = Float64(robust_cfg[:K_SIGMA])
     MIN_EDGES = Int(robust_cfg[:MIN_EDGES])
+    ROBUST_MIN_SCALE = Float64(robust_cfg[:min_scale])
 
     # IRLS
     IRLS_ITERS   = Int(irls_cfg[:iters])
@@ -183,6 +186,7 @@ function run(cfg::Dict{Symbol,Any}=config_default())
     STD_REPORT_EVERY  = Int(std_cfg[:report_every_batch])
     STD_MAX_NRED      = Int(std_cfg[:max_nred])
     STD_MIN_SIGMA     = Float64(std_cfg[:min_sigma])
+    STD_APPLY_MIN_SIGMA = Bool(std_cfg[:apply_min_sigma]) && (STD_MIN_SIGMA > 0.0)
     STD_MIN_DIAGREL   = Float64(std_cfg[:min_diag_rel])
     PSEUDO_WEIGHT_SOURCE = lowercase(String(std_cfg[:pseudo_weight_source]))
     PSEUDO_WEIGHT_EPS    = Float64(std_cfg[:pseudo_weight_eps])
@@ -246,14 +250,14 @@ function run(cfg::Dict{Symbol,Any}=config_default())
         (ev_all, theta_local, ref_local, std_local, deg_local, nodew_local,
          keep_mask, wrob, sigma_hat, pseudo_info) = processStationPhaseGroup(
             gi, gj, gd, w_base, maxEventID;
-            K_SIGMA=K_SIGMA, MIN_EDGES=MIN_EDGES,
+            K_SIGMA=K_SIGMA, MIN_EDGES=MIN_EDGES, ROBUST_MIN_SCALE=ROBUST_MIN_SCALE,
             IRLS_ITERS=IRLS_ITERS, C_HUBER=C_HUBER, IRLS_REL_TOL=IRLS_REL_TOL,
             RIDGE_EPS=RIDGE_EPS,
             EXPORT_THETA_STD=EXPORT_THETA_STD,
             THETASTD_MODE=THETASTD_MODE, THETASTD_FALLBACK=THETASTD_FALLBACK,
             STD_PROBES=STD_PROBES, STD_PROBE_DIST=STD_PROBE_DIST,
             STD_BATCH=STD_BATCH, STD_REPORT_EVERY=STD_REPORT_EVERY,
-            STD_MAX_NRED=STD_MAX_NRED, STD_MIN_SIGMA=STD_MIN_SIGMA, STD_MIN_DIAGREL=STD_MIN_DIAGREL,
+            STD_MAX_NRED=STD_MAX_NRED, STD_MIN_SIGMA=STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA=STD_APPLY_MIN_SIGMA, STD_MIN_DIAGREL=STD_MIN_DIAGREL,
             PSEUDO_WEIGHT_SOURCE=PSEUDO_WEIGHT_SOURCE, PSEUDO_WEIGHT_EPS=PSEUDO_WEIGHT_EPS,
             THETASTD_SCALE_FIXED=THETASTD_SCALE_FIXED,
             WRITE_ALT_NODEW_COL=WRITE_THETASTD_ALT_NODEW_COL,
@@ -983,6 +987,7 @@ end
 function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{Float64}, w_base::Vector{Float64}, maxEventID::Int;
     K_SIGMA::Float64,
     MIN_EDGES::Int,
+    ROBUST_MIN_SCALE::Float64,
     IRLS_ITERS::Int,
     C_HUBER::Float64,
     IRLS_REL_TOL::Float64,
@@ -996,6 +1001,7 @@ function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{F
     STD_REPORT_EVERY::Int,
     STD_MAX_NRED::Int,
     STD_MIN_SIGMA::Float64,
+    STD_APPLY_MIN_SIGMA::Bool,
     STD_MIN_DIAGREL::Float64,
     PSEUDO_WEIGHT_SOURCE::String,
     PSEUDO_WEIGHT_EPS::Float64,
@@ -1105,8 +1111,9 @@ function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{F
         if length(r) >= MIN_EDGES
             s0 = 1.4826 * mad1(r)
             if s0 == 0.0 || !isfinite(s0)
-                s0 = max(STD_MIN_SIGMA, std(r))
+                s0 = max(ROBUST_MIN_SCALE, std(r))
             end
+            s0 = max(s0, ROBUST_MIN_SCALE)
             bad = abs.(r) .> (K_SIGMA * s0)
         else
             bad = falses(length(r))
@@ -1134,11 +1141,12 @@ function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{F
                         s = 1.4826 * mad1(r[pos])
                     end
                     if s == 0.0 || !isfinite(s)
-                        s = max(STD_MIN_SIGMA, std(r[pos]))
+                        s = max(ROBUST_MIN_SCALE, std(r[pos]))
                     end
                 else
-                    s = STD_MIN_SIGMA
+                    s = ROBUST_MIN_SCALE
                 end
+                s = max(s, ROBUST_MIN_SCALE)
                 rs = r ./ s
 
                 wrob_c = huberWeight(rs, C_HUBER)
@@ -1167,12 +1175,12 @@ function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{F
                 sigma_hat = 1.4826 * mad1(r[pos])
             end
             if sigma_hat == 0.0 || !isfinite(sigma_hat)
-                sigma_hat = max(STD_MIN_SIGMA, std(r[pos]))
+                sigma_hat = max(ROBUST_MIN_SCALE, std(r[pos]))
             end
         else
-            sigma_hat = STD_MIN_SIGMA
+            sigma_hat = ROBUST_MIN_SCALE
         end
-        sigma_hat = max(sigma_hat, STD_MIN_SIGMA)
+        sigma_hat = max(sigma_hat, ROBUST_MIN_SCALE)
         comp_sigma[c] = sigma_hat
 
         kept = w_eff .> 0.0
@@ -1238,7 +1246,7 @@ function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{F
         if EXPORT_THETA_STD
             if run_hutch
                 std_c = estimateThetaStdHutch(n_c, a, b, w_eff, pin, keep_idx, RIDGE_EPS,
-                    sigma_hat, STD_PROBES, STD_PROBE_DIST, STD_BATCH, STD_REPORT_EVERY, STD_MIN_DIAGREL)
+                    sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_PROBES, STD_PROBE_DIST, STD_BATCH, STD_REPORT_EVERY, STD_MIN_DIAGREL)
             else
                 use_mode = THETASTD_MODE
                 if use_mode == "hutch"
@@ -1246,7 +1254,8 @@ function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{F
                 end
                 if use_mode == "pseudo_degree"
                     degv = max.(Float64.(deg_kept), 1.0)
-                    std_c = (sigma_hat ./ sqrt.(degv))
+                    sigma_std = STD_APPLY_MIN_SIGMA ? max(sigma_hat, STD_MIN_SIGMA) : sigma_hat
+                    std_c = (sigma_std ./ sqrt.(degv))
                     std_c[pin] = 0.0
                     used_pseudo_any = true
                     n_pseudo_comps += 1
@@ -1354,7 +1363,7 @@ speye(n::Int) = spdiagm(0 => ones(Float64, n))
 
 function estimateThetaStdHutch(n_c::Int, a::Vector{Int}, b::Vector{Int}, w_eff::Vector{Float64},
     pin::Int, keep_idx::Vector{Int}, RIDGE_EPS::Float64,
-    sigma_hat::Float64, K::Int, dist::String, batch::Int, reportEvery::Int, minDiagRel::Float64)
+    sigma_hat::Float64, minSigma::Float64, applyMinSigma::Bool, K::Int, dist::String, batch::Int, reportEvery::Int, minDiagRel::Float64)
 
     valid = w_eff .> 0.0
     aa = a[valid]; bb = b[valid]; ww = w_eff[valid]
@@ -1410,7 +1419,8 @@ function estimateThetaStdHutch(n_c::Int, a::Vector{Int}, b::Vector{Int}, w_eff::
     floorDiag = max(medDiag * minDiagRel, 0.0)
     diag_est = max.(diag_est, floorDiag)
 
-    std_red = sigma_hat .* sqrt.(max.(diag_est, 0.0))
+    sigma_std = applyMinSigma ? max(sigma_hat, minSigma) : sigma_hat
+    std_red = sigma_std .* sqrt.(max.(diag_est, 0.0))
 
     std_c = fill(NaN, n_c)
     std_c[pin] = 0.0

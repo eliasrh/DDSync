@@ -154,6 +154,15 @@ Controlled by:
 - `cfg.std.hutch.probes`
 - `cfg.std.hutch.max_nred` (skips large components)
 
+### Residual-scale floors for robust pruning vs. exported `std_theta`
+
+DDSync uses two separate small-scale safeguards:
+
+- `cfg.robust.min_scale = 5e-4` is only for robust pruning/IRLS scale estimates. If residuals are all identical or the robust scale is extremely small, this prevents divide-by-zero and over-pruning.
+- `cfg.std.min_sigma = 5e-4` with `cfg.std.apply_min_sigma = true` is only for converting the final residual noise estimate into exported `std_theta` values. Set `cfg.std.apply_min_sigma = false` (or set `cfg.std.min_sigma = []` or `0`) to disable that floor for advanced workflows.
+
+Example: if a component has `sigma_hat = 1e-5` seconds and `cfg.std.min_sigma = 5e-4`, Hutchinson and `pseudo_degree` std export use `5e-4` seconds as the residual-noise scale before applying graph leverage or degree. `min_sigma` floors the residual noise estimate, not each output row in `std_theta_*.txt`; rows can still be smaller or larger after the graph/degree conversion, and the pinned reference event remains `0`.
+
 ### Pseudo-std fallback
 
 If Hutch is skipped (too large / disabled), DDSync can write a **pseudo std** instead of NaNs:
@@ -175,8 +184,8 @@ DDSync prints warnings when pseudo std is used and records counts in `sync_metri
 
 - `cfg.io.*` — input/output paths, temp dir, progress logging.
 - `cfg.weights.*` — base weights derived from `cc` (`cc`, `cc^2`, or uniform).
-- `cfg.robust.*` — pruning threshold (`k_sigma`), minimum edges, IRLS controls.
-- `cfg.std.*` — whether to export std, and which estimator (Hutchinson vs. pseudo).
+- `cfg.robust.*` — pruning threshold (`k_sigma`), minimum edges, IRLS controls, and `min_scale` for zero/tiny robust residual scales.
+- `cfg.std.*` — whether to export std, which estimator (Hutchinson vs. pseudo), and the optional `min_sigma` floor used when converting residual noise to `std_theta`.
 - `cfg.output.*` — formatting + which weight is written to `dt_sync.cc`.
 
 See `+ddsync/config_default.m` for all defaults and descriptions.

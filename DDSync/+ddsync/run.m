@@ -46,6 +46,7 @@ MIN_EDGES    = cfg.robust.min_edges;
 IRLS_ITERS   = cfg.robust.irls_iters;
 C_HUBER      = cfg.robust.huber_c;
 IRLS_REL_TOL = cfg.robust.irls_rel_tol;
+ROBUST_MIN_SCALE = cfg.robust.min_scale;
 
 % Numerical stabilization
 RIDGE_EPS    = cfg.numeric.ridge_eps;
@@ -62,7 +63,8 @@ STD_PROBE_DIST  = cfg.std.hutch.probe_dist;
 STD_BATCH       = cfg.std.hutch.batch;
 STD_REPORT_EVERY_BATCH = cfg.std.hutch.report_every_batch;
 STD_MAX_NRED    = cfg.std.hutch.max_nred;
-STD_MIN_SIGMA   = cfg.std.hutch.min_sigma;
+STD_MIN_SIGMA   = cfg.std.min_sigma;
+STD_APPLY_MIN_SIGMA = cfg.std.apply_min_sigma && ~isempty(STD_MIN_SIGMA) && (STD_MIN_SIGMA > 0);
 STD_MIN_DIAGREL = cfg.std.hutch.min_diagrel;
 
 % Pseudo std / fallback behavior
@@ -146,10 +148,10 @@ for g=1:nGroups
 
     [theta_full, ref_full, keep_mask, wrob, sigma_hat, std_full, deg_full, nodew_full, pseudo_info] = ...
         processStationPhaseGroup(gi, gj, gd, w_base, maxEventID, ...
-            K_SIGMA, MIN_EDGES, IRLS_ITERS, C_HUBER, IRLS_REL_TOL, RIDGE_EPS, ...
+            K_SIGMA, MIN_EDGES, IRLS_ITERS, C_HUBER, IRLS_REL_TOL, ROBUST_MIN_SCALE, RIDGE_EPS, ...
             EXPORT_THETA_STD, THETASTD_MODE, THETASTD_FALLBACK, ...
             STD_PROBES, STD_PROBE_DIST, STD_BATCH, STD_REPORT_EVERY_BATCH, ...
-            STD_MAX_NRED, STD_MIN_SIGMA, STD_MIN_DIAGREL, ...
+            STD_MAX_NRED, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_MIN_DIAGREL, ...
             PSEUDO_WEIGHT_SOURCE, PSEUDO_WEIGHT_EPS, ...
             THETASTD_SCALE_FIXED);
 
@@ -568,10 +570,10 @@ end
 
 function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full, deg_full, nodew_full, pseudo_info] = ...
     processStationPhaseGroup(gi, gj, gd, w_base, maxEventID, ...
-        K_SIGMA, MIN_EDGES, IRLS_ITERS, C_HUBER, IRLS_REL_TOL, RIDGE_EPS, ...
+        K_SIGMA, MIN_EDGES, IRLS_ITERS, C_HUBER, IRLS_REL_TOL, ROBUST_MIN_SCALE, RIDGE_EPS, ...
         EXPORT_THETA_STD, THETASTD_MODE, THETASTD_FALLBACK, ...
         STD_PROBES, STD_PROBE_DIST, STD_BATCH, STD_REPORT_EVERY_BATCH, ...
-        STD_MAX_NRED, STD_MIN_SIGMA, STD_MIN_DIAGREL, ...
+        STD_MAX_NRED, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_MIN_DIAGREL, ...
         PSEUDO_WEIGHT_SOURCE, PSEUDO_WEIGHT_EPS, THETASTD_SCALE_FIXED)
 
     ev_all = unique([gi(:); gj(:)]);
@@ -648,7 +650,8 @@ function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full
         % prune
         if numel(r) >= MIN_EDGES
             s0 = 1.4826*mad(r,1);
-            if s0==0, s0 = max(STD_MIN_SIGMA, std(r)); end
+            if s0==0 || ~isfinite(s0), s0 = max(ROBUST_MIN_SCALE, std(r)); end
+            s0 = max(s0, ROBUST_MIN_SCALE);
             bad = abs(r) > K_SIGMA*s0;
         else
             bad = false(numel(r),1);
@@ -667,14 +670,20 @@ function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full
                 r = (theta_c(a) - theta_c(b)) - dt_k;
                 % robust scale on a "high-weight" subset to avoid inflation
                 ww = w_eff(:);
-                medw = median(ww(ww>0));
-                use = (ww > 0) & (ww >= 0.5*medw);
-                if any(use)
-                    s = 1.4826*mad(r(use),1);
+                pos = (ww > 0);
+                if any(pos)
+                    medw = median(ww(pos));
+                    use = pos & (ww >= 0.5*medw);
+                    if any(use)
+                        s = 1.4826*mad(r(use),1);
+                    else
+                        s = 1.4826*mad(r(pos),1);
+                    end
+                    if s==0 || ~isfinite(s), s = max(ROBUST_MIN_SCALE, std(r(pos))); end
                 else
-                    s = 1.4826*mad(r(ww>0),1);
+                    s = ROBUST_MIN_SCALE;
                 end
-                if s==0, s = max(STD_MIN_SIGMA, std(r(ww>0))); end
+                s = max(s, ROBUST_MIN_SCALE);
                 rs = r./s;
 
                 wrob_c = huberWeight(rs, C_HUBER);
@@ -693,15 +702,20 @@ function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full
         % final sigma_hat (again using higher-weight subset)
         r = (theta_c(a) - theta_c(b)) - dt_k;
         ww = w_eff(:);
-        medw = median(ww(ww>0));
-        use = (ww > 0) & (ww >= 0.5*medw);
-        if any(use)
-            sigma_hat = 1.4826*mad(r(use),1);
+        pos = (ww > 0);
+        if any(pos)
+            medw = median(ww(pos));
+            use = pos & (ww >= 0.5*medw);
+            if any(use)
+                sigma_hat = 1.4826*mad(r(use),1);
+            else
+                sigma_hat = 1.4826*mad(r(pos),1);
+            end
+            if sigma_hat==0 || ~isfinite(sigma_hat), sigma_hat = max(ROBUST_MIN_SCALE, std(r(pos))); end
         else
-            sigma_hat = 1.4826*mad(r(ww>0),1);
+            sigma_hat = ROBUST_MIN_SCALE;
         end
-        if sigma_hat==0, sigma_hat = max(STD_MIN_SIGMA, std(r(ww>0))); end
-        sigma_hat = max(sigma_hat, STD_MIN_SIGMA);
+        sigma_hat = max(sigma_hat, ROBUST_MIN_SCALE);
         sigma_hat_global = sigma_hat;
         comp_sigma(c) = sigma_hat;
 
@@ -744,7 +758,7 @@ function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full
             std_c(:) = NaN;
         elseif run_hutch
             std_c = estimateThetaStdHutch(n_c, a, b, w_eff, pin, keep_idx, RIDGE_EPS, ...
-                sigma_hat, STD_PROBES, STD_PROBE_DIST, STD_BATCH, STD_REPORT_EVERY_BATCH, STD_MIN_DIAGREL);
+                sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_PROBES, STD_PROBE_DIST, STD_BATCH, STD_REPORT_EVERY_BATCH, STD_MIN_DIAGREL);
         else
             % Hutch skipped (either disabled, too large, or mode not hutch): use fallback
             use_mode = lower(string(THETASTD_MODE));
@@ -760,7 +774,8 @@ function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full
             if EXPORT_THETA_STD && strcmpi(use_mode,'pseudo_degree')
                 % Pseudo std from degree: sigma_hat / sqrt(deg)
                 degv = max(double(deg_kept), 1);
-                sig = max(sigma_hat, STD_MIN_SIGMA);
+                sig = sigma_hat;
+                if STD_APPLY_MIN_SIGMA, sig = max(sig, STD_MIN_SIGMA); end
                 std_c = sig ./ sqrt(degv);
                 std_c(pin) = 0; % keep gauge semantics (theta(pin)=0)
                 pseudo_info.used_pseudo = true;
@@ -884,7 +899,7 @@ function [parent, root] = uf_find(parent, x)
 end
 
 function std_c = estimateThetaStdHutch(n_c, a, b, w_eff, pin, keep_idx, RIDGE_EPS, ...
-                                      sigma_hat, K, dist, batch, reportEvery, minDiagRel)
+                                      sigma_hat, minSigma, applyMinSigma, K, dist, batch, reportEvery, minDiagRel)
     a=a(:); b=b(:); w_eff=w_eff(:);
     valid = (w_eff>0);
     aa=a(valid); bb=b(valid); ww=w_eff(valid);
@@ -960,7 +975,12 @@ function std_c = estimateThetaStdHutch(n_c, a, b, w_eff, pin, keep_idx, RIDGE_EP
     floorDiag = max(medDiag * minDiagRel, 0);
     diag_est = max(diag_est, floorDiag);
 
-    var_red = (sigma_hat^2) * diag_est;
+    sigma_std = sigma_hat;
+    if applyMinSigma
+        sigma_std = max(sigma_std, minSigma);
+    end
+
+    var_red = (sigma_std^2) * diag_est;
     var_red = max(var_red, 0);
     std_red = sqrt(var_red);
 
