@@ -109,7 +109,7 @@ Both include quick starts, input/output formats, precision settings, `min_sigma`
 
 ## Example data
 
-The MATLAB folder includes example `dt.cc` and `catalog.txt` from the Spanish Springs sequence based on Trugman and Shearer (2017). The event IDs have been made sequential and lightly filtered for demonstration.
+The MATLAB folder includes example `dt.cc` and `catalog.txt` from the Spanish Springs sequence based on Trugman and Shearer (2017). The event IDs have been made sequential and lightly filtered for demonstration. Note that the dt.cc file provided here is a synchronized version of the one provided here by Trugman: https://github.com/dttrugman/GrowClust3D.jl/tree/master/examples/data/in as xcordata.txt. The user can thus compare to the original file and check if they are running the code correctly. Resynchronizing will not do much to the file unless input parameters are very different.
 
 ---
 
