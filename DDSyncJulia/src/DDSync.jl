@@ -68,6 +68,9 @@ function config_default()
         :thetastd_weight_cap  => 1.0,
         :dt_decimals          => 5,
         :dt_weight_decimals   => 4,
+        :theta_decimals       => 9,
+        :thetastd_decimals    => 9,
+        :theta_weight_decimals => 6,
         :station_field_width  => 8,
         :dt_field_width       => 10,
         :weight_field_width   => 8,
@@ -172,6 +175,9 @@ function run(cfg::Dict{Symbol,Any}=config_default())
     THETASTD_SCALE_FIXED = Float64(out_cfg[:thetastd_scale_fixed])
     THETASTD_WEIGHT_CAP  = Float64(out_cfg[:thetastd_weight_cap])
     WRITE_PRUNED_EDGES   = Bool(out_cfg[:write_pruned_edges])
+    THETA_DECIMALS       = Int(out_cfg[:theta_decimals])
+    THETASTD_DECIMALS    = Int(out_cfg[:thetastd_decimals])
+    THETA_WEIGHT_DECIMALS = Int(out_cfg[:theta_weight_decimals])
 
     # Std
     EXPORT_THETA_STD = Bool(std_cfg[:export])
@@ -314,7 +320,7 @@ function run(cfg::Dict{Symbol,Any}=config_default())
         sta, ph = splitKey(key)
 
         theta_fn = joinpath(thetadir, @sprintf("theta_%s_%s.txt", sta, ph))
-        writeThetaTriples(theta_fn, maxEventID, ev_all, theta_local, ref_local)
+        writeThetaTriples(theta_fn, maxEventID, ev_all, theta_local, ref_local; theta_decimals=THETA_DECIMALS)
 
         if EXPORT_THETA_STD
             std_fn = joinpath(thetastd_dir, @sprintf("std_theta_%s_%s.txt", sta, ph))
@@ -323,7 +329,9 @@ function run(cfg::Dict{Symbol,Any}=config_default())
                 write_weightcol=WRITE_THETASTD_WEIGHTCOL,
                 write_alt_nodew_col=WRITE_THETASTD_ALT_NODEW_COL,
                 thetastd_scale_fixed=THETASTD_SCALE_FIXED,
-                thetastd_weight_cap=THETASTD_WEIGHT_CAP
+                thetastd_weight_cap=THETASTD_WEIGHT_CAP,
+                thetastd_decimals=THETASTD_DECIMALS,
+                theta_weight_decimals=THETA_WEIGHT_DECIMALS
             )
         end
 
@@ -818,7 +826,8 @@ end
 
 # -------- Output writers --------
 
-function writeThetaTriples(fn::String, maxEventID::Int, ev_all::Vector{Int}, theta_local::Vector{Float64}, ref_local::Vector{Float64})
+function writeThetaTriples(fn::String, maxEventID::Int, ev_all::Vector{Int}, theta_local::Vector{Float64}, ref_local::Vector{Float64}; theta_decimals::Int=9)
+    theta_fmt = Printf.Format("%d %." * string(theta_decimals) * "f %.0f\n")
     open(fn, "w") do io
         idx = 1
         n = length(ev_all)
@@ -831,7 +840,7 @@ function writeThetaTriples(fn::String, maxEventID::Int, ev_all::Vector{Int}, the
                 th = NaN
                 rf = NaN
             end
-            @printf(io, "%d %.6f %.0f\n", ev, th, rf)
+            Printf.format(io, theta_fmt, ev, th, rf)
         end
     end
 end
@@ -842,7 +851,15 @@ function writeThetaStdWithDegree(fn::String, maxEventID::Int,
     write_weightcol::Bool=true,
     write_alt_nodew_col::Bool=false,
     thetastd_scale_fixed::Float64=500.0,
-    thetastd_weight_cap::Float64=1.0)
+    thetastd_weight_cap::Float64=1.0,
+    thetastd_decimals::Int=9,
+    theta_weight_decimals::Int=6)
+
+    std_fmt = "%d\t%." * string(thetastd_decimals) * "f\t%.0f\t%d"
+    weight_fmt = "\t%." * string(theta_weight_decimals) * "f"
+    fmt_base = Printf.Format(std_fmt * "\n")
+    fmt_weight = Printf.Format(std_fmt * weight_fmt * "\n")
+    fmt_weight_nodew = Printf.Format(std_fmt * weight_fmt * weight_fmt * "\n")
 
     open(fn, "w") do io
         idx = 1
@@ -874,17 +891,18 @@ function writeThetaStdWithDegree(fn::String, maxEventID::Int,
             end
 
             if write_weightcol && write_alt_nodew_col
-                @printf(io, "%d\t%.6f\t%.0f\t%d\t%.6f\t%.6f\n", ev, s, rf, dg, wtheta, nw)
+                Printf.format(io, fmt_weight_nodew, ev, s, rf, dg, wtheta, nw)
             elseif write_weightcol
-                @printf(io, "%d\t%.6f\t%.0f\t%d\t%.6f\n", ev, s, rf, dg, wtheta)
+                Printf.format(io, fmt_weight, ev, s, rf, dg, wtheta)
             elseif write_alt_nodew_col
-                @printf(io, "%d\t%.6f\t%.0f\t%d\t%.6f\n", ev, s, rf, dg, nw)
+                Printf.format(io, fmt_weight, ev, s, rf, dg, nw)
             else
-                @printf(io, "%d\t%.6f\t%.0f\t%d\n", ev, s, rf, dg)
+                Printf.format(io, fmt_base, ev, s, rf, dg)
             end
         end
     end
 end
+
 
 # -------- Robust utilities --------
 

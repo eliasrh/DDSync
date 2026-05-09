@@ -45,6 +45,11 @@
 # Formatting (match MATLAB standalone defaults as needed)
 # dt_decimals = 5
 # dt_weight_decimals = 4
+#
+# For microsecond/sub-microsecond theta export work:
+# theta_decimals = 9
+# thetastd_decimals = 9
+# theta_weight_decimals = 6
 # station_field_width = 8
 # dt_field_width = 10
 # weight_field_width = 8

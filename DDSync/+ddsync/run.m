@@ -80,6 +80,11 @@ THETASTD_SCALE_MODE  = cfg.output.theta_weight_scale_mode; % 'fixed' or 'median'
 THETASTD_SCALE_FIXED = cfg.output.theta_weight_scale_fixed;
 THETASTD_WEIGHT_CAP  = cfg.output.theta_weight_cap;
 
+% Precision for theta/thetastd export files
+THETA_DECIMALS        = cfg.output.theta_decimals;
+THETASTD_DECIMALS     = cfg.output.thetastd_decimals;
+THETA_WEIGHT_DECIMALS = cfg.output.theta_weight_decimals;
+
 % Streaming / progress
 PROG_EVERY = cfg.io.prog_every_lines;
 
@@ -170,14 +175,15 @@ for g=1:nGroups
 
     % write theta
     theta_fn = fullfile(THETADIR, sprintf('theta_%s_%s.txt', sta, ph));
-    writeThetaTriples(theta_fn, theta_full, ref_full);
+    writeThetaTriples(theta_fn, theta_full, ref_full, THETA_DECIMALS);
 
     % write std + degree (+ optional weight columns)
     if EXPORT_THETA_STD
         std_fn = fullfile(THETASTD_DIR, sprintf('std_theta_%s_%s.txt', sta, ph));
         writeThetaStdWithDegree(std_fn, std_full, ref_full, deg_full, ...
             THETASTD_SCALE_FIXED, THETASTD_WEIGHT_CAP, ...
-            WRITE_THETASTD_WEIGHTCOL, WRITE_ALT_NODE_WEIGHTCOL, nodew_full);
+            WRITE_THETASTD_WEIGHTCOL, WRITE_ALT_NODE_WEIGHTCOL, nodew_full, ...
+            THETASTD_DECIMALS, THETA_WEIGHT_DECIMALS);
     end
 
     % decisions file (in spooled-edge order)
@@ -442,21 +448,31 @@ function [sta, ph] = splitKey(key)
     sta = k{1}; ph = k{2};
 end
 
-function writeThetaTriples(fn, theta_full, ref_full)
+function writeThetaTriples(fn, theta_full, ref_full, theta_decimals)
     fid = fopen(fn,'w'); assert(fid>0);
     n = numel(theta_full);
+    lineFmt = sprintf('%%d %%.%df %%.0f\n', theta_decimals);
     for ev=1:n
-        fprintf(fid,'%d %.6f %.0f\n', ev, theta_full(ev), ref_full(ev));
+        fprintf(fid, lineFmt, ev, theta_full(ev), ref_full(ev));
     end
     fclose(fid);
 end
 
-function writeThetaStdWithDegree(fn, std_full, ref_full, deg_full, scale_fixed, w_cap, write_wcol, write_alt_wcol, nodew_full)
+function writeThetaStdWithDegree(fn, std_full, ref_full, deg_full, scale_fixed, w_cap, write_wcol, write_alt_wcol, nodew_full, thetastd_decimals, theta_weight_decimals)
     fid = fopen(fn,'w'); assert(fid>0);
     n = numel(std_full);
     if nargin < 7, write_wcol = false; end
     if nargin < 8, write_alt_wcol = false; end
     if nargin < 9, nodew_full = NaN(n,1); end
+    if nargin < 10, thetastd_decimals = 9; end
+    if nargin < 11, theta_weight_decimals = 6; end
+
+    fmt_std = sprintf('%%.%df', thetastd_decimals);
+    fmt_w = sprintf('%%.%df', theta_weight_decimals);
+    fmt_std_base = ['%d\t' fmt_std '\t%.0f\t%u\n'];
+    fmt_std_w = ['%d\t' fmt_std '\t%.0f\t%u\t' fmt_w '\n'];
+    fmt_std_nodew = ['%d\t' fmt_std '\t%.0f\t%u\t' fmt_w '\n'];
+    fmt_std_w_nodew = ['%d\t' fmt_std '\t%.0f\t%u\t' fmt_w '\t' fmt_w '\n'];
 
     for ev=1:n
         s = std_full(ev);
@@ -471,12 +487,14 @@ function writeThetaStdWithDegree(fn, std_full, ref_full, deg_full, scale_fixed, 
                 if isfinite(w_cap) && w_cap>0, wtheta = min(wtheta, w_cap); end
             end
             if write_alt_wcol
-                fprintf(fid,'%d\t%.6f\t%.0f\t%u\t%.6f\t%.6f\n', ev, s, r, d, wtheta, nodew_full(ev));
+                fprintf(fid, fmt_std_w_nodew, ev, s, r, d, wtheta, nodew_full(ev));
             else
-                fprintf(fid,'%d\t%.6f\t%.0f\t%u\t%.6f\n', ev, s, r, d, wtheta);
+                fprintf(fid, fmt_std_w, ev, s, r, d, wtheta);
             end
+        elseif write_alt_wcol
+            fprintf(fid, fmt_std_nodew, ev, s, r, d, nodew_full(ev));
         else
-            fprintf(fid,'%d\t%.6f\t%.0f\t%u\n', ev, s, r, d);
+            fprintf(fid, fmt_std_base, ev, s, r, d);
         end
     end
     fclose(fid);

@@ -42,6 +42,12 @@ cfg.output.write_dt_sync          = true;
 cfg.output.dt_weight_mode         = 'thetaStd'; % 'base'|'robust'|'combined'|'thetaStd'
 cfg.output.dt_weight_decimals     = 4;
 
+% Precision for theta/thetastd export files. Increase for microsecond or
+% sub-microsecond workflows.
+cfg.output.theta_decimals         = 9;
+cfg.output.thetastd_decimals      = 9;
+cfg.output.theta_weight_decimals  = 6;
+
 cfg.output.dt_decimals            = 5;   % decimals for dt values written to dt_sync
 cfg.output.station_field_width    = 8;   % station field width for aligned dt_sync output
 cfg.output.dt_field_width         = 10;  % dt numeric field width (includes sign)

@@ -177,7 +177,7 @@ DDSync prints warnings when pseudo std is used and records counts in `sync_metri
 - `cfg.weights.*` — base weights derived from `cc` (`cc`, `cc^2`, or uniform).
 - `cfg.robust.*` — pruning threshold (`k_sigma`), minimum edges, IRLS controls.
 - `cfg.std.*` — whether to export std, and which estimator (Hutchinson vs. pseudo).
-- `cfg.output.*` — formatting + which weight is written to `dt_sync.cc`.
+- `cfg.output.*` — formatting, theta export precision, and which weight is written to `dt_sync.cc`.
 
 See `+ddsync/config_default.m` for all defaults and descriptions.
 
@@ -209,6 +209,11 @@ cfg.io.tmpdir       = 'ddsync_tmp'; % put on fast local disk for large jobs
 
 % Output weights in dt_sync.cc
 % cfg.output.dt_weight_mode = 'thetaStd'; % 'base'|'robust'|'combined'|'thetaStd'
+
+% For microsecond/sub-microsecond theta export work:
+% cfg.output.theta_decimals = 9;
+% cfg.output.thetastd_decimals = 9;
+% cfg.output.theta_weight_decimals = 6;
 ```
 
 ---

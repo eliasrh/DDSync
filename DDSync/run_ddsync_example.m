@@ -30,4 +30,9 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % Optional: dt_sync weight mode
 % cfg.output.dt_weight_mode = 'thetaStd'; % 'base'|'robust'|'combined'|'thetaStd'
 
+% For microsecond/sub-microsecond theta export work:
+% cfg.output.theta_decimals = 9;
+% cfg.output.thetastd_decimals = 9;
+% cfg.output.theta_weight_decimals = 6;
+
 ddsync.run(cfg);

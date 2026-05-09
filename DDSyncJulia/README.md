@@ -72,7 +72,16 @@ These mirror the MATLAB standalone config defaults:
 - `cfg[:robust]` — pruning threshold (`K_SIGMA`) and minimum edges per component (`MIN_EDGES`)
 - `cfg[:irls]` — IRLS iteration count and Huber constant (`C_HUBER`)
 - `cfg[:std]` — standard-deviation export: Hutchinson vs. pseudo
-- `cfg[:output]` — which weight is written to `dt_sync.cc` and formatting options
+- `cfg[:output]` — which weight is written to `dt_sync.cc`, theta export precision, and formatting options
+
+For microsecond/sub-microsecond theta export work, set the output precision fields in TOML:
+
+```toml
+[output]
+theta_decimals = 9
+thetastd_decimals = 9
+theta_weight_decimals = 6
+```
 
 ### Dense vs. sparse storage (memory policy)
 
