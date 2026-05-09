@@ -1,8 +1,8 @@
 function out = run(cfg)
 %DDSYNC.RUN  Synchronize differential travel times (dt.cc) per station-phase.
 %
-% This is a functional, package-friendly wrapper around the authoritative
-% "synchro_polished.m" implementation, redesigned for standalone use.
+% This is the maintained MATLAB package implementation. The legacy
+% extras/synchro_polished.m script is kept as a standalone helper.
 %
 % Usage:
 %   cfg = ddsync.config_default();
@@ -53,6 +53,8 @@ RIDGE_EPS    = cfg.numeric.ridge_eps;
 
 % ---- Weight written into dt_sync.cc (third column) ----
 OUTPUT_WEIGHT_MODE = cfg.output.dt_weight_mode;   % 'base'|'robust'|'combined'|'thetaStd'
+THETA_DECIMALS     = max(0, round(cfg.output.theta_decimals));
+THETASTD_DECIMALS  = max(0, round(cfg.output.thetastd_decimals));
 
 % Theta std estimation / export
 EXPORT_THETA_STD = cfg.std.export;
@@ -172,14 +174,14 @@ for g=1:nGroups
 
     % write theta
     theta_fn = fullfile(THETADIR, sprintf('theta_%s_%s.txt', sta, ph));
-    writeThetaTriples(theta_fn, theta_full, ref_full);
+    writeThetaTriples(theta_fn, theta_full, ref_full, THETA_DECIMALS);
 
     % write std + degree (+ optional weight columns)
     if EXPORT_THETA_STD
         std_fn = fullfile(THETASTD_DIR, sprintf('std_theta_%s_%s.txt', sta, ph));
         writeThetaStdWithDegree(std_fn, std_full, ref_full, deg_full, ...
             THETASTD_SCALE_FIXED, THETASTD_WEIGHT_CAP, ...
-            WRITE_THETASTD_WEIGHTCOL, WRITE_ALT_NODE_WEIGHTCOL, nodew_full);
+            WRITE_THETASTD_WEIGHTCOL, WRITE_ALT_NODE_WEIGHTCOL, nodew_full, THETASTD_DECIMALS);
     end
 
     % decisions file (in spooled-edge order)
@@ -444,21 +446,31 @@ function [sta, ph] = splitKey(key)
     sta = k{1}; ph = k{2};
 end
 
-function writeThetaTriples(fn, theta_full, ref_full)
+function writeThetaTriples(fn, theta_full, ref_full, theta_decimals)
+    if nargin < 4 || isempty(theta_decimals), theta_decimals = 9; end
+    theta_decimals = max(0, round(theta_decimals));
+    fmt = sprintf('%%d %%.%df %%.0f\n', theta_decimals);
+
     fid = fopen(fn,'w'); assert(fid>0);
     n = numel(theta_full);
     for ev=1:n
-        fprintf(fid,'%d %.6f %.0f\n', ev, theta_full(ev), ref_full(ev));
+        fprintf(fid, fmt, ev, theta_full(ev), ref_full(ev));
     end
     fclose(fid);
 end
 
-function writeThetaStdWithDegree(fn, std_full, ref_full, deg_full, scale_fixed, w_cap, write_wcol, write_alt_wcol, nodew_full)
+function writeThetaStdWithDegree(fn, std_full, ref_full, deg_full, scale_fixed, w_cap, write_wcol, write_alt_wcol, nodew_full, thetastd_decimals)
     fid = fopen(fn,'w'); assert(fid>0);
     n = numel(std_full);
     if nargin < 7, write_wcol = false; end
     if nargin < 8, write_alt_wcol = false; end
     if nargin < 9, nodew_full = NaN(n,1); end
+    if nargin < 10 || isempty(thetastd_decimals), thetastd_decimals = 9; end
+    thetastd_decimals = max(0, round(thetastd_decimals));
+
+    fmt4 = sprintf('%%d\t%%.%df\t%%.0f\t%%u\n', thetastd_decimals);
+    fmt5 = sprintf('%%d\t%%.%df\t%%.0f\t%%u\t%%.6f\n', thetastd_decimals);
+    fmt6 = sprintf('%%d\t%%.%df\t%%.0f\t%%u\t%%.6f\t%%.6f\n', thetastd_decimals);
 
     for ev=1:n
         s = std_full(ev);
@@ -473,12 +485,12 @@ function writeThetaStdWithDegree(fn, std_full, ref_full, deg_full, scale_fixed, 
                 if isfinite(w_cap) && w_cap>0, wtheta = min(wtheta, w_cap); end
             end
             if write_alt_wcol
-                fprintf(fid,'%d\t%.6f\t%.0f\t%u\t%.6f\t%.6f\n', ev, s, r, d, wtheta, nodew_full(ev));
+                fprintf(fid, fmt6, ev, s, r, d, wtheta, nodew_full(ev));
             else
-                fprintf(fid,'%d\t%.6f\t%.0f\t%u\t%.6f\n', ev, s, r, d, wtheta);
+                fprintf(fid, fmt5, ev, s, r, d, wtheta);
             end
         else
-            fprintf(fid,'%d\t%.6f\t%.0f\t%u\n', ev, s, r, d);
+            fprintf(fid, fmt4, ev, s, r, d);
         end
     end
     fclose(fid);
@@ -711,11 +723,11 @@ function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full
             else
                 sigma_hat = 1.4826*mad(r(pos),1);
             end
-            if sigma_hat==0 || ~isfinite(sigma_hat), sigma_hat = max(ROBUST_MIN_SCALE, std(r(pos))); end
+            if sigma_hat==0 || ~isfinite(sigma_hat), sigma_hat = std(r(pos)); end
+            if ~isfinite(sigma_hat) || sigma_hat < 0, sigma_hat = 0; end
         else
-            sigma_hat = ROBUST_MIN_SCALE;
+            sigma_hat = NaN;
         end
-        sigma_hat = max(sigma_hat, ROBUST_MIN_SCALE);
         sigma_hat_global = sigma_hat;
         comp_sigma(c) = sigma_hat;
 
@@ -774,8 +786,7 @@ function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full
             if EXPORT_THETA_STD && strcmpi(use_mode,'pseudo_degree')
                 % Pseudo std from degree: sigma_hat / sqrt(deg)
                 degv = max(double(deg_kept), 1);
-                sig = sigma_hat;
-                if STD_APPLY_MIN_SIGMA, sig = max(sig, STD_MIN_SIGMA); end
+                sig = sigmaForThetaStd(sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA);
                 std_c = sig ./ sqrt(degv);
                 std_c(pin) = 0; % keep gauge semantics (theta(pin)=0)
                 pseudo_info.used_pseudo = true;
@@ -898,6 +909,17 @@ function [parent, root] = uf_find(parent, x)
     end
 end
 
+function sigma_std = sigmaForThetaStd(sigma_hat, minSigma, applyMinSigma)
+    if isfinite(sigma_hat) && sigma_hat >= 0
+        sigma_std = sigma_hat;
+    else
+        sigma_std = 0;
+    end
+    if applyMinSigma && isfinite(minSigma) && minSigma > 0
+        sigma_std = max(sigma_std, minSigma);
+    end
+end
+
 function std_c = estimateThetaStdHutch(n_c, a, b, w_eff, pin, keep_idx, RIDGE_EPS, ...
                                       sigma_hat, minSigma, applyMinSigma, K, dist, batch, reportEvery, minDiagRel)
     a=a(:); b=b(:); w_eff=w_eff(:);
@@ -975,10 +997,7 @@ function std_c = estimateThetaStdHutch(n_c, a, b, w_eff, pin, keep_idx, RIDGE_EP
     floorDiag = max(medDiag * minDiagRel, 0);
     diag_est = max(diag_est, floorDiag);
 
-    sigma_std = sigma_hat;
-    if applyMinSigma
-        sigma_std = max(sigma_std, minSigma);
-    end
+    sigma_std = sigmaForThetaStd(sigma_hat, minSigma, applyMinSigma);
 
     var_red = (sigma_std^2) * diag_est;
     var_red = max(var_red, 0);

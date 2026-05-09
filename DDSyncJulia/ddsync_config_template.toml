@@ -11,7 +11,7 @@
 [io]
 # infile_dt = "dt.cc"
 # catalog_file = "catalog.txt"
-# tmpdir = "synchro_tmp"
+# tmpdir = "ddsync_tmp"
 # thetadir = "theta"
 # thetastd_dir = "thetastd"
 # metrics_file = "sync_metrics.txt"
@@ -35,6 +35,7 @@
 # RIDGE_EPS = 1e-10
 
 [output]
+# write_dt_sync = true
 # weight_mode = "thetaStd"     # "base" | "robust" | "combined" | "thetaStd"
 # write_pruned_edges = false
 #
@@ -46,6 +47,8 @@
 # Formatting (match MATLAB standalone defaults as needed)
 # dt_decimals = 5
 # dt_weight_decimals = 4
+# theta_decimals = 9
+# thetastd_decimals = 9
 # station_field_width = 8
 # dt_field_width = 10
 # weight_field_width = 8

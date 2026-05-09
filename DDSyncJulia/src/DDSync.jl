@@ -35,7 +35,7 @@ function config_default()
     cfg[:io] = Dict{Symbol,Any}(
         :infile_dt     => "dt.cc",
         :catalog_file  => "catalog.txt",
-        :tmpdir        => "synchro_tmp",
+        :tmpdir        => "ddsync_tmp",
         :thetadir      => "theta",
         :thetastd_dir  => "thetastd",
         :metrics_file  => "sync_metrics.txt",
@@ -63,12 +63,15 @@ function config_default()
     )
 
     cfg[:output] = Dict{Symbol,Any}(
+        :write_dt_sync        => true,
         :weight_mode          => "thetaStd", # "base" | "robust" | "combined" | "thetaStd"
         :thetastd_scale_mode  => "fixed",    # "fixed" | "median"
         :thetastd_scale_fixed => 500.0,
         :thetastd_weight_cap  => 1.0,
         :dt_decimals          => 5,
         :dt_weight_decimals   => 4,
+        :theta_decimals       => 9,
+        :thetastd_decimals    => 9,
         :station_field_width  => 8,
         :dt_field_width       => 10,
         :weight_field_width   => 8,
@@ -170,10 +173,13 @@ function run(cfg::Dict{Symbol,Any}=config_default())
     RIDGE_EPS = Float64(num_cfg[:RIDGE_EPS])
 
     # Output
+    WRITE_DT_SYNC        = Bool(get(out_cfg, :write_dt_sync, true))
     OUTPUT_WEIGHT_MODE   = lowercase(String(out_cfg[:weight_mode]))
     THETASTD_SCALE_MODE  = lowercase(String(out_cfg[:thetastd_scale_mode]))
     THETASTD_SCALE_FIXED = Float64(out_cfg[:thetastd_scale_fixed])
     THETASTD_WEIGHT_CAP  = Float64(out_cfg[:thetastd_weight_cap])
+    THETA_DECIMALS       = max(0, Int(round(Float64(get(out_cfg, :theta_decimals, 9)))))
+    THETASTD_DECIMALS    = max(0, Int(round(Float64(get(out_cfg, :thetastd_decimals, 9)))))
     WRITE_PRUNED_EDGES   = Bool(out_cfg[:write_pruned_edges])
 
     # Std
@@ -318,7 +324,7 @@ function run(cfg::Dict{Symbol,Any}=config_default())
         sta, ph = splitKey(key)
 
         theta_fn = joinpath(thetadir, @sprintf("theta_%s_%s.txt", sta, ph))
-        writeThetaTriples(theta_fn, maxEventID, ev_all, theta_local, ref_local)
+        writeThetaTriples(theta_fn, maxEventID, ev_all, theta_local, ref_local; theta_decimals=THETA_DECIMALS)
 
         if EXPORT_THETA_STD
             std_fn = joinpath(thetastd_dir, @sprintf("std_theta_%s_%s.txt", sta, ph))
@@ -327,7 +333,8 @@ function run(cfg::Dict{Symbol,Any}=config_default())
                 write_weightcol=WRITE_THETASTD_WEIGHTCOL,
                 write_alt_nodew_col=WRITE_THETASTD_ALT_NODEW_COL,
                 thetastd_scale_fixed=THETASTD_SCALE_FIXED,
-                thetastd_weight_cap=THETASTD_WEIGHT_CAP
+                thetastd_weight_cap=THETASTD_WEIGHT_CAP,
+                thetastd_decimals=THETASTD_DECIMALS
             )
         end
 
@@ -378,7 +385,8 @@ function run(cfg::Dict{Symbol,Any}=config_default())
     end
 
     # Pass 2: write dt_sync.cc
-    @printf("Pass 2: writing %s ...\n", out_dt_sync)
+    if WRITE_DT_SYNC
+        @printf("Pass 2: writing %s ...\n", out_dt_sync)
     readers = openDecisionReaders(decFiles; chunk=decision_chunk)
 
     fin  = open(infile_dt, "r")
@@ -480,9 +488,14 @@ function run(cfg::Dict{Symbol,Any}=config_default())
                 si = getStoreValue(sstore, cur_i, store_dense)
                 sj = getStoreValue(sstore, cur_j, store_dense)
                 std_dt = sqrt(max(0.0, si^2 + sj^2))
-                std_dt = max(std_dt, 1e-12)
-                w_raw = 1.0 / std_dt
-                w_out = w_raw / max(thetaStdScale, eps())
+                if std_dt <= 0.0 || !isfinite(std_dt)
+                    w_out = 0.0
+                else
+                    w_out = (1.0 / std_dt) / thetaStdScale
+                    if isfinite(THETASTD_WEIGHT_CAP) && THETASTD_WEIGHT_CAP > 0.0
+                        w_out = min(w_out, THETASTD_WEIGHT_CAP)
+                    end
+                end
             else
                 # default
                 w_out = max(0.0, isfinite(cc_in) ? weight_fun_base(cc_in) : 0.0) * wrob
@@ -492,9 +505,6 @@ function run(cfg::Dict{Symbol,Any}=config_default())
             w_out = 0.0
         end
 
-        if isfinite(THETASTD_WEIGHT_CAP)
-            w_out = min(w_out, THETASTD_WEIGHT_CAP)
-        end
 
         if !pendingPrinted && !isempty(pendingHeader)
             println(fout, pendingHeader)
@@ -505,10 +515,15 @@ function run(cfg::Dict{Symbol,Any}=config_default())
             STA_W, sta, DT_W, DT_DEC, dt_corr, W_W, W_DEC, w_out, ph)
     end
 
-    close(fin); close(fout)
-    closeDecisionReaders(readers)
+        close(fin); close(fout)
+        closeDecisionReaders(readers)
+    end
 
-    @printf("Done.\n  Synced dt: %s\n  Metrics:  %s\n", out_dt_sync, metrics_file)
+    @printf("Done.\n")
+    if WRITE_DT_SYNC
+        @printf("  Synced dt: %s\n", out_dt_sync)
+    end
+    @printf("  Metrics:  %s\n", metrics_file)
     if EXPORT_THETA_STD
         @printf("  Theta std dir: %s/\n", thetastd_dir)
     end
@@ -822,7 +837,12 @@ end
 
 # -------- Output writers --------
 
-function writeThetaTriples(fn::String, maxEventID::Int, ev_all::Vector{Int}, theta_local::Vector{Float64}, ref_local::Vector{Float64})
+function writeThetaTriples(fn::String, maxEventID::Int, ev_all::Vector{Int}, theta_local::Vector{Float64}, ref_local::Vector{Float64};
+    theta_decimals::Int=9)
+
+    theta_decimals = max(theta_decimals, 0)
+    theta_fmt = Printf.Format("%d %." * string(theta_decimals) * "f %.0f\n")
+
     open(fn, "w") do io
         idx = 1
         n = length(ev_all)
@@ -835,7 +855,7 @@ function writeThetaTriples(fn::String, maxEventID::Int, ev_all::Vector{Int}, the
                 th = NaN
                 rf = NaN
             end
-            @printf(io, "%d %.6f %.0f\n", ev, th, rf)
+            print(io, Printf.format(theta_fmt, ev, th, rf))
         end
     end
 end
@@ -846,7 +866,13 @@ function writeThetaStdWithDegree(fn::String, maxEventID::Int,
     write_weightcol::Bool=true,
     write_alt_nodew_col::Bool=false,
     thetastd_scale_fixed::Float64=500.0,
-    thetastd_weight_cap::Float64=1.0)
+    thetastd_weight_cap::Float64=1.0,
+    thetastd_decimals::Int=9)
+
+    thetastd_decimals = max(thetastd_decimals, 0)
+    fmt4 = Printf.Format("%d\t%." * string(thetastd_decimals) * "f\t%.0f\t%d\n")
+    fmt5 = Printf.Format("%d\t%." * string(thetastd_decimals) * "f\t%.0f\t%d\t%.6f\n")
+    fmt6 = Printf.Format("%d\t%." * string(thetastd_decimals) * "f\t%.0f\t%d\t%.6f\t%.6f\n")
 
     open(fn, "w") do io
         idx = 1
@@ -865,26 +891,25 @@ function writeThetaStdWithDegree(fn::String, maxEventID::Int,
                 nw = NaN
             end
 
-            # Optional weight column derived from std(theta)
             if write_weightcol
                 if !(isfinite(s) && s > 0.0)
                     wtheta = 0.0
                 else
-                    wtheta = (1.0 / s) / max(thetastd_scale_fixed, eps())
-                    if isfinite(thetastd_weight_cap)
+                    wtheta = (1.0 / s) / thetastd_scale_fixed
+                    if isfinite(thetastd_weight_cap) && thetastd_weight_cap > 0.0
                         wtheta = min(wtheta, thetastd_weight_cap)
                     end
                 end
             end
 
             if write_weightcol && write_alt_nodew_col
-                @printf(io, "%d\t%.6f\t%.0f\t%d\t%.6f\t%.6f\n", ev, s, rf, dg, wtheta, nw)
+                print(io, Printf.format(fmt6, ev, s, rf, dg, wtheta, nw))
             elseif write_weightcol
-                @printf(io, "%d\t%.6f\t%.0f\t%d\t%.6f\n", ev, s, rf, dg, wtheta)
+                print(io, Printf.format(fmt5, ev, s, rf, dg, wtheta))
             elseif write_alt_nodew_col
-                @printf(io, "%d\t%.6f\t%.0f\t%d\t%.6f\n", ev, s, rf, dg, nw)
+                print(io, Printf.format(fmt5, ev, s, rf, dg, nw))
             else
-                @printf(io, "%d\t%.6f\t%.0f\t%d\n", ev, s, rf, dg)
+                print(io, Printf.format(fmt4, ev, s, rf, dg))
             end
         end
     end
@@ -1175,12 +1200,14 @@ function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{F
                 sigma_hat = 1.4826 * mad1(r[pos])
             end
             if sigma_hat == 0.0 || !isfinite(sigma_hat)
-                sigma_hat = max(ROBUST_MIN_SCALE, std(r[pos]))
+                sigma_hat = std(r[pos])
+            end
+            if !isfinite(sigma_hat) || sigma_hat < 0.0
+                sigma_hat = 0.0
             end
         else
-            sigma_hat = ROBUST_MIN_SCALE
+            sigma_hat = NaN
         end
-        sigma_hat = max(sigma_hat, ROBUST_MIN_SCALE)
         comp_sigma[c] = sigma_hat
 
         kept = w_eff .> 0.0
@@ -1254,7 +1281,7 @@ function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{F
                 end
                 if use_mode == "pseudo_degree"
                     degv = max.(Float64.(deg_kept), 1.0)
-                    sigma_std = STD_APPLY_MIN_SIGMA ? max(sigma_hat, STD_MIN_SIGMA) : sigma_hat
+                    sigma_std = sigmaForThetaStd(sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA)
                     std_c = (sigma_std ./ sqrt.(degv))
                     std_c[pin] = 0.0
                     used_pseudo_any = true
@@ -1361,6 +1388,14 @@ end
 
 speye(n::Int) = spdiagm(0 => ones(Float64, n))
 
+function sigmaForThetaStd(sigma_hat::Float64, minSigma::Float64, applyMinSigma::Bool)
+    sigma_std = (isfinite(sigma_hat) && sigma_hat >= 0.0) ? sigma_hat : 0.0
+    if applyMinSigma && isfinite(minSigma) && minSigma > 0.0
+        sigma_std = max(sigma_std, minSigma)
+    end
+    return sigma_std
+end
+
 function estimateThetaStdHutch(n_c::Int, a::Vector{Int}, b::Vector{Int}, w_eff::Vector{Float64},
     pin::Int, keep_idx::Vector{Int}, RIDGE_EPS::Float64,
     sigma_hat::Float64, minSigma::Float64, applyMinSigma::Bool, K::Int, dist::String, batch::Int, reportEvery::Int, minDiagRel::Float64)
@@ -1419,7 +1454,7 @@ function estimateThetaStdHutch(n_c::Int, a::Vector{Int}, b::Vector{Int}, w_eff::
     floorDiag = max(medDiag * minDiagRel, 0.0)
     diag_est = max.(diag_est, floorDiag)
 
-    sigma_std = applyMinSigma ? max(sigma_hat, minSigma) : sigma_hat
+    sigma_std = sigmaForThetaStd(sigma_hat, minSigma, applyMinSigma)
     std_red = sigma_std .* sqrt.(max.(diag_est, 0.0))
 
     std_c = fill(NaN, n_c)

@@ -13,6 +13,10 @@ cfg.io.catalog_file = 'catalog.txt';
 cfg.io.out_dt_sync  = 'dt_sync.cc';
 cfg.io.metrics_file = 'sync_metrics.txt';
 
+% Example: preserve microsecond/sub-microsecond values in text outputs
+% cfg.output.theta_decimals = 12;
+% cfg.output.thetastd_decimals = 12;
+
 % Example: use CC^2 base weights
 % cfg.weights.base_fun = 'cc2';
 
