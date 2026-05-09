@@ -24,6 +24,8 @@ If you are new to DDSync, start with the README inside each subfolder:
 
 Both versions aim to match **default parameter values** and **output formats**. If you find a mismatch, please report it so it can be fixed consistently.
 
+A notable shared default is the separation between robust residual-scale safeguards and exported theta-standard-deviation floors: `robust.min_scale` protects pruning/IRLS from zero or tiny residual scales, while `std.min_sigma` (enabled by `std.apply_min_sigma`) only floors the residual noise estimate before writing `std_theta`. `min_sigma` floors the residual noise estimate, not each output row in `std_theta_*.txt`.
+
 ## Example data (MATLAB only)
 
 The MATLAB folder includes example `dt.cc` and `catalog.txt` from the Spanish Springs sequence (Trugman & Shearer, 2017: https://github.com/dttrugman/GrowClust). The event IDs have been made sequential and lightly filtered for demonstration. The Julia version does **not** include these files, but it reads the same formats.
