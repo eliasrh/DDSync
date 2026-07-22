@@ -37,47 +37,6 @@ The Julia folder does not include example `dt.cc` and `catalog.txt` files, but i
 
 ---
 
-## Shared precision behavior
-
-Both implementations expose formatting precision for the `theta` and `std_theta` value columns. The default is 9 digits after the decimal point.
-
-MATLAB:
-
-```matlab
-cfg.output.theta_decimals = 9;
-cfg.output.thetastd_decimals = 9;
-```
-
-Julia/TOML:
-
-```toml
-[output]
-theta_decimals = 9
-thetastd_decimals = 9
-```
-
-These settings matter when differential times can be microseconds or smaller. The older fixed `%.6f` output has only 6 digits after the decimal point. With seconds as the unit, 6 decimals is 1 microsecond, 9 decimals is 1 nanosecond, and 12 decimals is 1 picosecond. Set these fields to `12` or higher for sub-microsecond applications, or set them to `6` to reproduce older formatting.
-
-The synchronized `dt` column in `dt_sync.cc` has a separate precision setting: `cfg.output.dt_decimals` in MATLAB and `dt_decimals` in Julia/TOML.
-
----
-
-## Shared `min_scale` versus `min_sigma` behavior
-
-DDSync has two separate small-scale safeguards. They are deliberately separate.
-
-`robust.min_scale` is used during robust pruning and Huber IRLS. It prevents divide-by-zero behavior when residuals are exactly zero or nearly zero. It can affect which edges are pruned and how robust weights are computed.
-
-`std.min_sigma` is used only when exporting `std_theta`, and only when `std.apply_min_sigma = true`. It floors the final residual-noise scale before Hutchinson or `pseudo_degree` standard deviations are written.
-
-Disabling `std.apply_min_sigma` disables the exported `std_theta` residual-noise floor. It does not disable the robust pruning/IRLS floor.
-
-`min_sigma` does not say that every row in `std_theta_*.txt` must be at least `min_sigma`. It floors the residual-noise estimate before graph leverage or degree scaling. Individual rows can be smaller or larger, and the pinned reference event remains `0`.
-
-`pseudo_weight` mode does not use `sigma_hat`, so `min_sigma` does not affect `pseudo_weight` standard deviations.
-
----
-
 ## Input assumptions
 
 DDSync expects `dt.cc` blocks like:
@@ -113,9 +72,50 @@ The MATLAB folder includes example `dt.cc` and `catalog.txt` from the Spanish Sp
 
 ---
 
+## Lastest Update: Shared `min_scale` versus `min_sigma` behavior
+
+DDSync has two separate small-scale safeguards. They are deliberately separate.
+
+`robust.min_scale` is used during robust pruning and Huber IRLS. It prevents divide-by-zero behavior when residuals are exactly zero or nearly zero. It can affect which edges are pruned and how robust weights are computed.
+
+`std.min_sigma` is used only when exporting `std_theta`, and only when `std.apply_min_sigma = true`. It floors the final residual-noise scale before Hutchinson or `pseudo_degree` standard deviations are written.
+
+Disabling `std.apply_min_sigma` disables the exported `std_theta` residual-noise floor. It does not disable the robust pruning/IRLS floor.
+
+`min_sigma` does not say that every row in `std_theta_*.txt` must be at least `min_sigma`. It floors the residual-noise estimate before graph leverage or degree scaling. Individual rows can be smaller or larger, and the pinned reference event remains `0`.
+
+`pseudo_weight` mode does not use `sigma_hat`, so `min_sigma` does not affect `pseudo_weight` standard deviations.
+
+---
+
+## Lastest update: Shared precision behavior
+
+Both implementations expose formatting precision for the `theta` and `std_theta` value columns. The default is 9 digits after the decimal point.
+
+MATLAB:
+
+```matlab
+cfg.output.theta_decimals = 9;
+cfg.output.thetastd_decimals = 9;
+```
+
+Julia/TOML:
+
+```toml
+[output]
+theta_decimals = 9
+thetastd_decimals = 9
+```
+
+These settings matter when differential times can be microseconds or smaller. The older fixed `%.6f` output has only 6 digits after the decimal point. With seconds as the unit, 6 decimals is 1 microsecond, 9 decimals is 1 nanosecond, and 12 decimals is 1 picosecond. Set these fields to `12` or higher for sub-microsecond applications, or set them to `6` to reproduce older formatting.
+
+The synchronized `dt` column in `dt_sync.cc` has a separate precision setting: `cfg.output.dt_decimals` in MATLAB and `dt_decimals` in Julia/TOML.
+
+---
+
 ## References
 
-- Heimisson, E. R., Yu, Y. (2026, in preparation). *DDSync: Graph-based denoising of differential travel-time observations with applications to pick reconstruction and path-difference tomography.*
+- Elías Rafn Heimisson, Yifan Yu; *DDSync: Graph‐Based Denoising of Differential Travel‐Time Observations with Applications to Pick Reconstruction and Path‐Difference Tomography.* **Seismological Research Letters** 2026; doi: https://doi.org/10.1785/0220260086 
 - Trugman, D. T., & Shearer, P. M. (2017). *GrowClust: A hierarchical clustering algorithm for relative earthquake relocation, with application to the Spanish Springs and Sheldon, Nevada, earthquake sequences.* **Seismological Research Letters**, 88(2A), 379-391.
 
 ---
