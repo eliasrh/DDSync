@@ -2,7 +2,10 @@
 
 DDSync reads a HypoDD/GrowClust-style `dt.cc` file, processes one station-phase group at a time, and writes a cleaned and synchronized differential-time file. For each station and phase, it estimates one relative arrival-time value, `theta`, for every event that can be constrained by the data. A kept observation between events `i` and `j` is then represented by `theta(i) - theta(j)`.
 
-The MATLAB and Julia versions are intended to use the same defaults and produce the same file formats. This README uses Julia dictionary and TOML names. The MATLAB README contains the same guidance using MATLAB `cfg` names.
+The MATLAB and Julia versions use the same synchronization defaults and
+numeric output formats. Julia additionally maps external event IDs when
+needed. This automatic step is not available in MATLAB. This README uses
+Julia dictionary and TOML names.
 
 ---
 
@@ -35,7 +38,11 @@ fallback = "pseudo_degree"
 
 - Julia.
 - Only Julia standard libraries are used.
-- Event IDs in the input should be positive integers. The output files are written for rows `1:maxEventID`.
+- Unique decimal integer event IDs in the final catalog column. Large,
+  non-sequential, zero and negative external IDs are supported through
+  automatic mapping to positive internal IDs.
+- At most 16,777,216 catalog events, the exact-integer limit of the existing
+  single-precision temporary record format after mapping.
 
 ---
 
@@ -74,11 +81,70 @@ A header line starts with `#` and gives the event pair `i j`. The third header v
 
 DDSync groups measurements by `(STA, PH)`. For example, all `DYN P` rows are solved as one graph and all `DYN S` rows are solved as another graph.
 
-Event IDs must be suitable for array-style output: DDSync writes rows `1:maxEventID` in each `theta` and `std_theta` file. If your catalog uses arbitrary IDs, reindex before running.
+Both event IDs in each pair header must occur in the catalog. DDSync checks
+this while reading the file and stops with the line number if an ID is
+missing. A pair cannot refer to the same event twice.
 
 ### `catalog.txt`
 
-DDSync uses `catalog.txt` only to find the largest event ID. The event ID must be the last whitespace-separated column on each non-empty line. If your catalog uses a different layout, edit the `readMaxEventID` helper in `src/DDSync.jl` accordingly.
+DDSync reads the ID in the last whitespace-separated column of each catalog
+row. The remaining columns are not used for synchronization. Blank lines and
+comment lines beginning with `#`, `%`, `*` or `!` are accepted. IDs must be
+decimal integer tokens: `123456789012345678901234567890` is valid, while
+`1.23e29` and `123.0` are not. Leading zeros and a leading `+` are accepted,
+but do not distinguish IDs: `0012` and `12` identify the same event and cannot
+both appear in the catalog.
+
+### Event IDs and GraphSplit
+
+If the catalog contains exactly the IDs `1:N`, DDSync preserves them, even
+when the rows are in another order. Otherwise, it assigns `1:N` in catalog
+row order before processing any differential times. Original IDs are held
+as exact decimal text; only the small internal indices enter the numerical
+calculation. This avoids arrays sized by the largest external ID and avoids
+rounding large IDs in the temporary files. The input catalog and `dt.cc`
+are not modified.
+
+When mapping is needed, the terminal notice and `sync_metrics.txt` identify
+the new files. With default output paths, they are:
+
+| File | Event IDs and purpose |
+| --- | --- |
+| `dt_sync.cc` | Original IDs, for use with the original catalog in other programs. |
+| `dt_sync_seq.cc` | The same synchronized measurements and weights with sequential IDs. |
+| `catalog_seq.txt` | Original catalog rows with only the final ID column replaced by `1:N`. |
+| `event_id_map.csv` | `original_id,sequential_id`, preserving the correspondence exactly. |
+| `theta/` and `thetastd/` | Sequential IDs for both events and their reference events. |
+
+These companion files are placed beside `io.out_dt_sync`. Its filename gains
+`_seq` before the extension: for example, `results/cleaned.cc` produces
+`results/cleaned_seq.cc`, `results/catalog_seq.txt`, and
+`results/event_id_map.csv`. The configured theta and metrics paths are
+unchanged. With `output.write_dt_sync = false`, neither synchronized
+differential-time file is written, but the sequential catalog and ID map
+are still provided. Use separate output directories for separate datasets;
+files from an older run are not a substitute for the current run's mapping.
+
+For GraphSplit, point `io.catalog_file` to **`catalog_seq.txt` whenever DDSync
+reports remapping**, and supply the matching `theta/` and `thetastd/`
+directories. GraphSplit reads the potentials directly and does not need
+either differential-time output. If no mapping was needed, continue using
+the original catalog. Keep `event_id_map.csv` with the relocation results
+to recover the original external IDs. Read its original-ID column as text
+or exact integers, rather than spreadsheet floating-point numbers.
+
+Reordering catalog rows is safe when each ID stays attached to its event.
+Renumbering IDs after synchronization is not safe: the catalog, theta IDs,
+reference IDs and any uncertainty files must use the same correspondence.
+Similarly, settings that identify a pinned or fixed event in GraphSplit
+must use the sequential ID when a mapping was made.
+
+The mapping is streamed into DDSync's existing passes through `dt.cc`; it
+does not load the complete differential-time file or create another copy of
+the unsynchronized input. Additional indexing memory grows with catalog
+size, not the number of observations or the magnitude of the external IDs.
+Starting with `1:N` remains convenient because it avoids the extra output
+files. No TOML changes are needed to enable automatic mapping.
 
 ---
 
@@ -92,7 +158,8 @@ This is a HypoDD-style differential-time file with synchronized `dt` values. For
 STA  theta(i)-theta(j)  weight  PH
 ```
 
-The third column is controlled by `output.weight_mode`.
+The third column is controlled by `output.weight_mode`. Pair headers retain
+the original input IDs, including when DDSync uses sequential IDs internally.
 
 Pruned edges are omitted by default. If `output.write_pruned_edges = true`, DDSync keeps the original station line but writes its weight as `0`.
 
@@ -105,6 +172,9 @@ EventID  theta  refEventID
 ```
 
 `theta` is the relative arrival-time value for that event in seconds. `refEventID` is the pinned reference event used to fix the arbitrary additive offset in that connected component. The pinned event has `theta = 0`. Events that cannot be constrained are written as `NaN`.
+
+Each file has one row per catalog event, with internal IDs `1:N`. If mapping
+was needed, both `EventID` and `refEventID` refer to `catalog_seq.txt`.
 
 ### `thetastd/std_theta_<STA>_<PH>.txt`
 
@@ -131,6 +201,10 @@ group    n_edges  n_kept  pruned_pct  robust_p50  robust_p05  robust_p95  frac_r
 ```
 
 `group` is the station-phase key, `n_edges` is the number of input measurements, and `n_kept` is the number retained after component gating and pruning. `sigma_hat` is the final robust residual scale for reporting and for `std_theta` export. It is not the same thing as `std.min_sigma`.
+
+Comment lines at the top also record the catalog event count, whether IDs
+were remapped, and the paths to any ID map and sequential outputs. Check
+these lines when choosing the catalog for a downstream relocation.
 
 ---
 
@@ -192,7 +266,7 @@ All defaults come from `DDSync.config_default()`. You usually override them in `
 | Field | Default | Plain-language meaning |
 | --- | ---: | --- |
 | `infile_dt` | `"dt.cc"` | Input differential-time file. |
-| `catalog_file` | `"catalog.txt"` | Catalog file used to find `maxEventID`; event ID must be in the last column. |
+| `catalog_file` | `"catalog.txt"` | Catalog defining the complete event-ID set; the ID must be in the last column. |
 | `out_dt_sync` | `"dt_sync.cc"` | Output synchronized differential-time file. |
 | `metrics_file` | `"sync_metrics.txt"` | Output metrics summary. |
 | `tmpdir` | `"ddsync_tmp"` | Scratch directory for per-group spool files and edge-decision files. Put this on fast local storage for large jobs. |
@@ -304,7 +378,7 @@ Hutchinson error decreases slowly, approximately like `1/sqrt(probes)`. For very
 | --- | ---: | --- |
 | `prog_every_lines` | `2000000` | Print progress every this many input lines while streaming. |
 | `print_new_groups` | `false` | Print a message whenever a new station-phase group is first seen. Useful for debugging input parsing. |
-| `store_dense_group_arrays` | `false` | If true, store per-group theta/std arrays as dense vectors of length `maxEventID`. This is faster but can use more memory. If false, use dictionaries keyed by event ID. |
+| `store_dense_group_arrays` | `false` | If true, store per-group theta/std arrays as dense vectors with one entry per catalog event. This is faster but can use more memory. If false, use dictionaries keyed by event ID. |
 | `decision_chunk_records` | `200000` | Number of edge-decision records read per chunk during pass 2. Larger chunks can reduce I/O overhead but use more memory. |
 | `median_scale_cap` | `2000000` | Maximum number of kept observations sampled when computing the global median thetaStd scale. |
 
@@ -353,4 +427,11 @@ Pruned station lines are then written with weight `0` instead of being omitted.
 
 ## Notes on MATLAB/Julia parity
 
-The MATLAB and Julia implementations are intended to produce the same output formats. Small floating-point differences can occur because MATLAB and Julia use different sparse linear algebra libraries and random-number streams, especially for Hutchinson standard deviations. For deterministic format comparisons, use the same precision settings and prefer `std.mode = "pseudo_degree"`.
+The numerical formats remain compatible, but automatic ID mapping is specific to Julia. Compare runs using the same compact event IDs in both implementations. Small floating-point differences can occur because MATLAB and Julia use different sparse linear algebra libraries and random-number streams, especially for Hutchinson standard deviations. For deterministic format comparisons, use the same precision settings and prefer `std.mode = "pseudo_degree"`.
+
+## Tests
+
+Run the regression tests from this directory with `julia test/runtests.jl`.
+They exercise large and gapped IDs, unchanged sequential inputs, original
+and sequential outputs, dense and dictionary storage, uncertainty weights,
+and invalid-input protection.

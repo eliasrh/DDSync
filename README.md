@@ -2,12 +2,32 @@
 
 DDSync is a graph-based denoising and synchronization tool for differential travel-time pair files. It reads a HypoDD/GrowClust-style `dt.cc` file, solves each station-phase group independently, and writes synchronized differential times plus per-event `theta` and optional `std_theta` metadata.
 
-There are two maintained implementations:
+The repository contains two implementations:
 
 - `DDSync/` - MATLAB package implementation.
 - `DDSyncJulia/` - Julia implementation with TOML configuration and no non-stdlib package dependencies.
 
-The MATLAB and Julia implementations are intended to match in algorithm, default behavior, and output file formats. The implementation-specific README files document the same behavior using the names used by that language.
+The synchronization algorithm and its defaults are shared. Input-ID handling
+differs: Julia now maps arbitrary integer IDs automatically, while MATLAB
+still requires users to prepare compact positive IDs before running.
+
+## Recent update (28 September 2026): automatic event-ID mapping in Julia
+
+DDSyncJulia now accepts integer event IDs without requiring them to fit in a
+machine integer or form a sequential range. When the catalog IDs do not form
+`1:N`, it maps them to that range in catalog row order. The mapping is printed
+as a notice, recorded in the metrics, and saved in `event_id_map.csv`.
+
+The usual `dt_sync.cc` retains the original IDs. The additional
+`dt_sync_seq.cc` and `catalog_seq.txt` use the new IDs, as do both ID columns
+in the `theta` and `std_theta` files. Use **`catalog_seq.txt` with those theta
+directories in GraphSplit**. No new TOML setting is required. Inputs already
+using `1:N` retain their IDs and do not need the extra files.
+
+The MATLAB implementation is unchanged. Its IDs must still be reindexed
+before processing; automatic mapping is available only in Julia. The
+[Julia manual](DDSyncJulia/README.md#event-ids-and-graphsplit) explains file
+selection, custom output paths, and how to retain the original correspondence.
 
 ---
 
@@ -51,7 +71,18 @@ STA  dt  cc  PH
 
 The header gives the event pair `i j`; the third header number is ignored. Each station line gives the station code, differential time in seconds, correlation or quality value, and phase label.
 
-The catalog file is used to find `maxEventID`. The event ID must be the last whitespace-separated column. DDSync writes full `1:maxEventID` rows in `theta` and `std_theta` files, so event IDs should be reindexed to a contiguous positive integer range before running.
+The event ID must be the last whitespace-separated catalog column. Each
+catalog ID must be unique, and every pair endpoint in `dt.cc` must occur in
+the catalog. In Julia, write IDs as decimal integers, without decimal points
+or scientific notation. They are read exactly, even when their magnitude
+exceeds the range of a 64-bit integer.
+
+Starting with IDs `1:N` is still recommended: it avoids the mapping and extra
+output files. Catalog rows do not have to be sorted by ID. MATLAB requires
+this compact positive-ID convention because it writes rows `1:maxEventID`
+and stores IDs in single precision during temporary processing. Its IDs
+must not exceed 16,777,216. Julia applies this limit to the **number of
+catalog events**, rather than to the external IDs.
 
 ---
 
@@ -114,6 +145,12 @@ The synchronized `dt` column in `dt_sync.cc` has a separate precision setting: `
 ---
 
 ## References
+
+- Elías Rafn Heimisson (2026). GraphSplit: Sparse Double-Difference Earthquake
+  Relocation From Synchronized Differential-Time Graphs.
+  [doi:10.1029/2026JB035934](https://doi.org/10.1029/2026JB035934).
+  Submitted to *Journal of Geophysical Research: Solid Earth*; preprint in
+  moderation. The DOI may not yet resolve.
 
 - Elías Rafn Heimisson, Yifan Yu; *DDSync: Graph‐Based Denoising of Differential Travel‐Time Observations with Applications to Pick Reconstruction and Path‐Difference Tomography.* **Seismological Research Letters** 2026; doi: https://doi.org/10.1785/0220260086 
 - Trugman, D. T., & Shearer, P. M. (2017). *GrowClust: A hierarchical clustering algorithm for relative earthquake relocation, with application to the Spanish Springs and Sheldon, Nevada, earthquake sequences.* **Seismological Research Letters**, 88(2A), 379-391.

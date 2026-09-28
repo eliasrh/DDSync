@@ -1,8 +1,18 @@
 # DDSync (MATLAB)
 
+**Event IDs in this implementation:** MATLAB does not perform the automatic
+mapping available in DDSyncJulia. Reindex the catalog and differential-time
+pair headers consistently to `1:N` before running; IDs must not exceed
+16,777,216 because the temporary group files store them in single precision.
+The helpers in `extras/` can be adapted for this preparation. Keep the ID
+correspondence, and use the same reindexed catalog with the resulting
+`theta/` and `thetastd/` files in GraphSplit. Reordering catalog rows is safe;
+renumbering only the catalog after DDSync is not. The MATLAB algorithm and
+code are unchanged by the Julia indexing update.
+
 DDSync reads a HypoDD/GrowClust-style `dt.cc` file, processes one station-phase group at a time, and writes a cleaned and synchronized differential-time file. For each station and phase, it estimates one relative arrival-time value, `theta`, for every event that can be constrained by the data. A kept observation between events `i` and `j` is then represented by `theta(i) - theta(j)`.
 
-The MATLAB and Julia versions are intended to use the same defaults and produce the same file formats. This README uses MATLAB `cfg` names. The Julia README contains the same guidance using Julia/TOML names.
+The MATLAB and Julia versions use the same synchronization defaults and numerical formats. Automatic handling of external IDs is specific to Julia. This README describes MATLAB configuration and its required input preparation.
 
 ---
 

@@ -1,0 +1,14 @@
+name: Julia tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        julia-version: ['1.10', '1']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - run: julia --startup-file=no DDSyncJulia/test/runtests.jl

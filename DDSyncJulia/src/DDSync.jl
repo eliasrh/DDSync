@@ -13,13 +13,15 @@ module DDSync
 # Notes
 #   - This is a direct, readable implementation. It is not tuned for peak speed.
 #   - For very large catalogs, consider cfg[:runtime][:store_dense_group_arrays] = false
-#     to avoid maxEventID × nGroups dense storage in memory.
+#     to avoid nEvents × nGroups dense storage in memory.
 
 using SparseArrays
 using LinearAlgebra
 using Statistics
 using Random
 using Printf
+
+include("EventIDs.jl")
 
 # ---------------------------- Public API ----------------------------
 
@@ -99,7 +101,7 @@ function config_default()
     cfg[:runtime] = Dict{Symbol,Any}(
         :prog_every_lines        => 2_000_000,
         :print_new_groups        => false,
-        # If true, store per-group theta/std as dense Float32 vectors length maxEventID (fast, memory heavy).
+        # If true, store per-group theta/std as dense Float32 vectors length nEvents (fast, memory heavy).
         # If false, store per-group theta/std as Dict{Int,Float32} (memory light, slower in pass 2).
         :store_dense_group_arrays => false,
         :decision_chunk_records   => 200_000,
@@ -139,16 +141,35 @@ function run(cfg::Dict{Symbol,Any}=config_default())
         mkpath(thetastd_dir)
     end
 
-    @printf("Reading %s to get max EventID...\n", catalog_file)
-    maxEventID = readMaxEventID(catalog_file)
-    @printf("Max EventID = %d\n", maxEventID)
+    @printf("Reading event IDs from %s...\n", catalog_file)
+    event_index = readEventIndex(catalog_file)
+    maxEventID = length(event_index.original)
+    index_paths = indexOutputPaths(out_dt_sync)
+    write_dt = Bool(get(out_cfg, :write_dt_sync, true))
+    mkpath(dirname(abspath(out_dt_sync)))
+    mkpath(dirname(abspath(metrics_file)))
+    destinations = String[metrics_file]
+    write_dt && push!(destinations, out_dt_sync)
+    if event_index.remapped
+        append!(destinations, [index_paths.catalog, index_paths.mapping])
+        write_dt && push!(destinations, index_paths.dt)
+        println("Event IDs are not the complete range 1:N. Mapping $maxEventID events to 1:N in catalog row order.")
+        println("  theta/thetastd will use the new IDs; dt_sync retains the original IDs.")
+        println("  GraphSplit catalog: $(index_paths.catalog)")
+        println("  ID correspondence: $(index_paths.mapping)")
+    else
+        println("Event IDs already form 1:$maxEventID; preserving the existing IDs.")
+    end
+    checkIndexOutputPaths(destinations, [infile_dt, catalog_file])
 
     @printf("Pass 1: streaming %s and spooling groups...\n", infile_dt)
     groupKeys, groupFiles, groupCounts = spoolGroups(infile_dt, tmpdir;
+        event_index = event_index,
         prog_every = Int(rt_cfg[:prog_every_lines]),
         print_new_groups = Bool(rt_cfg[:print_new_groups])
     )
     nGroups = length(groupKeys)
+    event_index.remapped && writeIndexFiles(catalog_file, event_index, index_paths)
     @printf("Found %d station+phase groups.\n", nGroups)
 
     key2g = Dict{String,Int}()
@@ -213,6 +234,7 @@ function run(cfg::Dict{Symbol,Any}=config_default())
     fidm = open(metrics_file, "w")
     @printf(fidm, "# DDSync metrics
 ")
+    writeIndexMetrics(fidm, event_index, index_paths, WRITE_DT_SYNC)
     mode_print = String(out_cfg[:weight_mode])
     dist_print = String(std_cfg[:probe_dist])
     thetastd_mode_print = String(std_cfg[:mode])
@@ -320,7 +342,7 @@ function run(cfg::Dict{Symbol,Any}=config_default())
             end
         end
 
-        # Write theta + std files (full 1..maxEventID rows, MATLAB-compatible)
+        # Write theta + std files for internal IDs 1:N (one row per catalog event).
         sta, ph = splitKey(key)
 
         theta_fn = joinpath(thetadir, @sprintf("theta_%s_%s.txt", sta, ph))
@@ -377,7 +399,8 @@ function run(cfg::Dict{Symbol,Any}=config_default())
     thetaStdScale = THETASTD_SCALE_FIXED
     if OUTPUT_WEIGHT_MODE == "thetastd" && THETASTD_SCALE_MODE == "median"
         @printf("Computing global median scale for thetaStd weights (extra streaming pass)...\n")
-        thetaStdScale = computeThetaStdMedianScale(infile_dt, key2g, decFiles, std_store, store_dense, maxEventID; cap=median_cap, chunk=decision_chunk)
+        thetaStdScale = computeThetaStdMedianScale(infile_dt, key2g, decFiles, std_store, store_dense, maxEventID;
+            cap=median_cap, chunk=decision_chunk, event_index=event_index)
         if !(isfinite(thetaStdScale) && thetaStdScale > 0)
             thetaStdScale = THETASTD_SCALE_FIXED
         end
@@ -391,6 +414,8 @@ function run(cfg::Dict{Symbol,Any}=config_default())
 
     fin  = open(infile_dt, "r")
     fout = open(out_dt_sync, "w")
+    fseq = event_index.remapped ? open(index_paths.dt, "w") : nothing
+    outputs = fseq === nothing ? (fout,) : (fout, fseq)
 
     # Formatting (match MATLAB standalone)
     STA_W = Int(out_cfg[:station_field_width])
@@ -404,7 +429,8 @@ function run(cfg::Dict{Symbol,Any}=config_default())
     cur_i = 0
     cur_j = 0
 
-    for L in eachline(fin)
+    try
+    for (line_number, L) in enumerate(eachline(fin))
         Lt = strip(L)
         if isempty(Lt)
             continue
@@ -414,17 +440,7 @@ function run(cfg::Dict{Symbol,Any}=config_default())
             pendingHeader = L
             pendingPrinted = false
 
-            nums = split(strip(Lt[2:end]))
-            if length(nums) >= 2
-                try
-                    cur_i = parse(Int, nums[1])
-                    cur_j = parse(Int, nums[2])
-                catch
-                    cur_i = 0; cur_j = 0
-                end
-            else
-                cur_i = 0; cur_j = 0
-            end
+            cur_i, cur_j = mappedPair(Lt, event_index, "$infile_dt:$line_number")
             continue
         end
 
@@ -446,13 +462,16 @@ function run(cfg::Dict{Symbol,Any}=config_default())
         if !haskey(key2g, key)
             if !pendingPrinted && !isempty(pendingHeader)
                 println(fout, pendingHeader)
+                fseq === nothing || println(fseq, sequentialHeader(pendingHeader, cur_i, cur_j))
                 pendingPrinted = true
             end
             dt_corr = dt_in
             w_out = max(0.0, isfinite(cc_in) ? weight_fun_base(cc_in) : 0.0)
 
-            @printf(fout, "    %-*s %*.*f %*.*f %s\n",
-                STA_W, sta, DT_W, DT_DEC, dt_corr, W_W, W_DEC, w_out, ph)
+            for output in outputs
+                @printf(output, "    %-*s %*.*f %*.*f %s\n",
+                    STA_W, sta, DT_W, DT_DEC, dt_corr, W_W, W_DEC, w_out, ph)
+            end
             continue
         end
 
@@ -508,20 +527,27 @@ function run(cfg::Dict{Symbol,Any}=config_default())
 
         if !pendingPrinted && !isempty(pendingHeader)
             println(fout, pendingHeader)
+            fseq === nothing || println(fseq, sequentialHeader(pendingHeader, cur_i, cur_j))
             pendingPrinted = true
         end
 
-        @printf(fout, "    %-*s %*.*f %*.*f %s\n",
-            STA_W, sta, DT_W, DT_DEC, dt_corr, W_W, W_DEC, w_out, ph)
+        for output in outputs
+            @printf(output, "    %-*s %*.*f %*.*f %s\n",
+                STA_W, sta, DT_W, DT_DEC, dt_corr, W_W, W_DEC, w_out, ph)
+        end
     end
 
-        close(fin); close(fout)
+    finally
+        close(fin)
+        foreach(close, outputs)
         closeDecisionReaders(readers)
+    end
     end
 
     @printf("Done.\n")
     if WRITE_DT_SYNC
         @printf("  Synced dt: %s\n", out_dt_sync)
+        event_index.remapped && println("  Sequential synced dt: $(index_paths.dt)")
     end
     @printf("  Metrics:  %s\n", metrics_file)
     if EXPORT_THETA_STD
@@ -544,23 +570,6 @@ function makeBaseWeightFun(mode::String)
     end
 end
 
-# Read max EventID (last token per nonempty line)
-function readMaxEventID(catalog_file::String)
-    maxID = 0
-    open(catalog_file, "r") do io
-        for L in eachline(io)
-            Lt = strip(L)
-            isempty(Lt) && continue
-            toks = split(Lt)
-            id = tryparse(Int, toks[end])
-            if id !== nothing
-                maxID = max(maxID, id)
-            end
-        end
-    end
-    return maxID
-end
-
 sanitizeKey(key::String) = replace(key, r"[^A-Za-z0-9_]" => "_")
 
 function splitKey(key::String)
@@ -579,7 +588,8 @@ end
 Stream dt.cc and spool records per (station,phase) into binary group files.
 Each record written as 4×Float32: [i, j, dt, cc].
 """
-function spoolGroups(infile_dt::String, tmpdir::String; prog_every::Int=2_000_000, print_new_groups::Bool=false)
+function spoolGroups(infile_dt::String, tmpdir::String; prog_every::Int=2_000_000,
+    print_new_groups::Bool=false, event_index::Union{Nothing,EventIndex}=nothing)
     keys = String[]
     files = String[]
     counts = Int[]
@@ -591,6 +601,7 @@ function spoolGroups(infile_dt::String, tmpdir::String; prog_every::Int=2_000_00
     cur_j = 0
     nLine = 0
 
+    try
     open(infile_dt, "r") do io
         for L in eachline(io)
             nLine += 1
@@ -601,15 +612,7 @@ function spoolGroups(infile_dt::String, tmpdir::String; prog_every::Int=2_000_00
             isempty(Lt) && continue
 
             if startswith(Lt, "#")
-                nums = split(strip(Lt[2:end]))
-                if length(nums) >= 2
-                    i = tryparse(Int, nums[1])
-                    j = tryparse(Int, nums[2])
-                    if i !== nothing && j !== nothing
-                        cur_i = i
-                        cur_j = j
-                    end
-                end
+                cur_i, cur_j = mappedPair(Lt, event_index, "$infile_dt:$nLine")
                 continue
             end
 
@@ -621,6 +624,7 @@ function spoolGroups(infile_dt::String, tmpdir::String; prog_every::Int=2_000_00
             cc  = tryparse(Float64, toks[3])
             ph  = toks[4]
             (dt === nothing || cc === nothing) && continue
+            cur_i > 0 && cur_j > 0 || error("$infile_dt:$nLine: observation precedes an event-pair header.")
 
             key = string(sta, "_", ph)
 
@@ -645,8 +649,8 @@ function spoolGroups(infile_dt::String, tmpdir::String; prog_every::Int=2_000_00
         end
     end
 
-    for fid in fids
-        close(fid)
+    finally
+        foreach(close, fids)
     end
 
     return keys, files, counts
@@ -770,7 +774,8 @@ function computeThetaStdMedianScale(infile_dt::String,
     store_dense::Bool,
     maxEventID::Int;
     cap::Int=2_000_000,
-    chunk::Int=200_000)
+    chunk::Int=200_000,
+    event_index::Union{Nothing,EventIndex}=nothing)
 
     readers = openDecisionReaders(decFiles; chunk=chunk)
     vals = Float64[]
@@ -779,26 +784,20 @@ function computeThetaStdMedianScale(infile_dt::String,
     cur_i = 0
     cur_j = 0
 
+    try
     open(infile_dt, "r") do io
-        for L in eachline(io)
+        for (line_number, L) in enumerate(eachline(io))
             Lt = strip(L)
             isempty(Lt) && continue
 
             if startswith(Lt, "#")
-                nums = split(strip(Lt[2:end]))
-                if length(nums) >= 2
-                    i = tryparse(Int, nums[1])
-                    j = tryparse(Int, nums[2])
-                    if i !== nothing && j !== nothing
-                        cur_i = i
-                        cur_j = j
-                    end
-                end
+                cur_i, cur_j = mappedPair(Lt, event_index, "$infile_dt:$line_number")
                 continue
             end
 
             toks = split(Lt)
             length(toks) < 4 && continue
+            (tryparse(Float64, toks[2]) === nothing || tryparse(Float64, toks[3]) === nothing) && continue
             sta = toks[1]
             ph  = toks[4]
             key = string(sta, "_", ph)
@@ -827,7 +826,9 @@ function computeThetaStdMedianScale(infile_dt::String,
         end
     end
 
-    closeDecisionReaders(readers)
+    finally
+        closeDecisionReaders(readers)
+    end
 
     if isempty(vals)
         return 1.0
