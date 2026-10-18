@@ -1,7 +1,8 @@
 % reindex_dtcc.m
 % -------------------------------------------------------------------------
-% Reads 'catalog.txt', reindexes the event IDs 1,2,3,… in order of appearance,
-% writes both 'catalog_new.txt' and 'dt_new.cc' with those new indices.
+% Reads 'catalog_long.txt' and 'dt_long.cc', reindexes positive numeric IDs
+% in order of appearance, and writes 'catalog.txt' and 'dt.cc'.
+% Dataset-specific example: see extras/README.md before running.
 
 clearvars; clc;
 
@@ -81,4 +82,4 @@ end
 fclose(fidIn);
 fclose(fidOut);
 
-fprintf('Done. Wrote catalog_new.txt and dt_new.cc with %d unique events.\n', numel(uniqueIDs));
+fprintf('Done. Wrote catalog.txt and dt.cc with %d unique events.\n', numel(uniqueIDs));

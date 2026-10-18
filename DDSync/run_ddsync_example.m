@@ -1,8 +1,8 @@
-% examples/run_ddsync_example.m
+% run_ddsync_example.m
 %
 % Minimal example. Update file paths then run.
 
-%appath() to add path to file if needed
+% Add this folder to the MATLAB path if needed.
 
 cfg = ddsync.config_default();
 cfg.io.infile_dt    = 'dt.cc';
@@ -26,7 +26,8 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 
 % Optional: standard deviation / weights export
 % cfg.std.mode     = 'pseudo_degree'; % faster than Hutch
-% cfg.std.fallback = 'pseudo_degree';
+% cfg.std.fallback = 'exact'; % also handles negative/unconverged estimates
+% cfg.std.exact_max_nred = 2048;
 % cfg.std.min_sigma = 5e-4;       % residual-noise floor for exported std_theta
 % cfg.std.apply_min_sigma = true; % set false (or min_sigma=[]/0) to disable
 
@@ -36,5 +37,12 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % Example: preserve microsecond/sub-microsecond values in text outputs
 % cfg.output.theta_decimals = 12;
 % cfg.output.thetastd_decimals = 12;
+
+% Adaptive Hutchinson: maximum budget, early convergence checks, safe fallback.
+% cfg.std.hutch.probes = 2048;
+% cfg.std.hutch.min_probes = 128;
+% cfg.std.hutch.rel_tol = 0.10;
+% Read # std_component diagnostics in sync_metrics.txt before using uncertainties.
+% See ../docs/uncertainty.md for probe selection and fallback behavior.
 
 ddsync.run(cfg);

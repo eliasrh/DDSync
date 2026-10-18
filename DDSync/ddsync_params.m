@@ -20,7 +20,14 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % Example: use CC^2 base weights
 % cfg.weights.base_fun = 'cc2';
 
-% Example: disable expensive Hutch std and use pseudo-degree fallback
+% Optional: a fast weighting proxy (not a statistical uncertainty)
 % cfg.std.mode = 'pseudo_degree';
+% Adaptive Hutchinson: maximum budget, early convergence checks, safe fallback.
+% cfg.std.hutch.probes = 2048;
+% cfg.std.hutch.min_probes = 128;
+% cfg.std.hutch.rel_tol = 0.10;
+% Read # std_component diagnostics in sync_metrics.txt before using uncertainties.
+% See ../docs/uncertainty.md for probe selection and fallback behavior.
+
 
 end

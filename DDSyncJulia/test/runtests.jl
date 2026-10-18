@@ -158,3 +158,5 @@ end
         @test read(cfg[:io][:infile_dt])==before
     end
 end
+
+include("numerical_regressions.jl")

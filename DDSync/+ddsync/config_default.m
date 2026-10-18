@@ -2,7 +2,7 @@ function cfg = config_default()
 %DDSYNC.CONFIG_DEFAULT Default configuration for DDSync (standalone).
 %
 % Edit fields in a copy of this struct (recommended) rather than modifying
-% this file. See examples/run_ddsync_example.m.
+% this file. See run_ddsync_example.m.
 %
 % All times are in seconds; distances are implicit via the dt network.
 
@@ -59,12 +59,15 @@ cfg.output.theta_weight_cap         = 1.0;      % cap written weights (Inf disab
 cfg.std.export = true;
 
 % mode:
-%   'hutch'         : try Hutchinson diag(inv(L)); fallback if skipped
+%   'hutch'         : adaptive Hutchinson; fallback if skipped or unreliable
+%   'exact'         : deterministic diagonal, then graph bound beyond size cap
+%   'graph_bound'   : finite conservative bound from retained path resistances
 %   'pseudo_degree' : always pseudo std from node degree (fast)
 %   'pseudo_weight' : always pseudo std from node weight (fast)
-%   'none'          : do not write thetastd files (still can write dt_sync)
+%   'none'          : NaN std except reference=0; export controls file writing
 cfg.std.mode     = 'hutch';
-cfg.std.fallback = 'pseudo_degree';  % when hutch skipped: 'pseudo_degree'|'pseudo_weight'|'nan'
+cfg.std.fallback = 'exact';  % skipped/failed Hutch: 'exact'|'graph_bound'|'pseudo_degree'|'pseudo_weight'
+cfg.std.exact_max_nred = 2048; % exact solve size cap; beyond this use a finite graph bound
 
 % Pseudo-weight settings (used if std.mode or std.fallback uses pseudo_weight)
 cfg.std.pseudo_weight_source = 'combined';  % 'combined'|'robust'|'base'
@@ -81,14 +84,16 @@ cfg.std.write_weight_column     = true;
 cfg.std.write_alt_weight_column = false;
 
 % Hutchinson settings (only used if std.mode='hutch')
-cfg.std.hutch.probes            = 100000;    % 0 disables Hutch (forces fallback if export=true)
+cfg.std.hutch.probes            = 2048;      % maximum; stop early when convergence checks pass
+cfg.std.hutch.min_probes        = 128;
+cfg.std.hutch.rel_tol           = 0.10;      % max per-node MC standard error / diagonal
 cfg.std.hutch.probe_dist        = 'rademacher'; % 'rademacher'|'gaussian'
-cfg.std.hutch.batch             = 250;
+cfg.std.hutch.batch             = 128;
 cfg.std.hutch.report_every_batch= 10;
 
 cfg.std.hutch.max_nred          = 40000;     % skip Hutch if reduced system larger than this
 cfg.std.min_sigma               = 5e-4;      % floor on residual noise estimate when converting to std_theta
 cfg.std.apply_min_sigma         = true;      % false (or min_sigma=[]/0) disables exported std_theta floor
-cfg.std.hutch.min_diagrel       = 1e-12;     % floor on diag(inv(L)) relative to median(diag)
+cfg.std.hutch.min_diagrel       = 1e-12;     % deprecated, ignored; failed estimates are never clipped
 
 end

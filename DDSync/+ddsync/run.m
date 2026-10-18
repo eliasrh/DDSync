@@ -2,7 +2,7 @@ function out = run(cfg)
 %DDSYNC.RUN  Synchronize differential travel times (dt.cc) per station-phase.
 %
 % This is the maintained MATLAB package implementation. The legacy
-% extras/synchro_polished.m script is kept as a standalone helper.
+% extras/synchro_polished.m entry point also calls this implementation.
 %
 % Usage:
 %   cfg = ddsync.config_default();
@@ -17,6 +17,8 @@ if nargin < 1 || isempty(cfg)
 else
     cfg = ddsync.merge_struct(ddsync.config_default(), cfg);
 end
+ddsync.validate_std_config(cfg.std);
+assert(isfinite(cfg.numeric.ridge_eps) && cfg.numeric.ridge_eps>=0,'numeric.ridge_eps must be finite and nonnegative');
 
 % ---------- unpack config ----------
 infile_dt    = cfg.io.infile_dt;
@@ -70,8 +72,8 @@ STD_APPLY_MIN_SIGMA = cfg.std.apply_min_sigma && ~isempty(STD_MIN_SIGMA) && (STD
 STD_MIN_DIAGREL = cfg.std.hutch.min_diagrel;
 
 % Pseudo std / fallback behavior
-THETASTD_MODE            = cfg.std.mode;      % 'hutch'|'pseudo_degree'|'pseudo_weight'|'none'
-THETASTD_FALLBACK        = cfg.std.fallback;  % when hutch skipped: 'pseudo_degree'|'pseudo_weight'|'nan'
+THETASTD_MODE            = cfg.std.mode;      % 'hutch'|'exact'|'graph_bound'|'pseudo_degree'|'pseudo_weight'|'none'
+THETASTD_FALLBACK        = cfg.std.fallback;  % skipped/unreliable Hutch: 'exact'|'graph_bound'|'pseudo_degree'|'pseudo_weight'
 PSEUDO_WEIGHT_SOURCE     = cfg.std.pseudo_weight_source; % 'combined'|'robust'|'base'
 PSEUDO_WEIGHT_EPS        = cfg.std.pseudo_weight_eps;
 
@@ -86,14 +88,6 @@ THETASTD_WEIGHT_CAP  = cfg.output.theta_weight_cap;
 
 % Streaming / progress
 PROG_EVERY = cfg.io.prog_every_lines;
-
-% ---------- PRE-WARN on probes ----------
-if EXPORT_THETA_STD && STD_PROBES > 0 && strcmpi(THETASTD_MODE,'hutch')
-    fprintf('\n[STD WARNING]\n');
-    fprintf('  Hutchinson diag(inv(L)) convergence is slow: estimator error ~ O(1/sqrt(K)).\n');
-    fprintf('  If you want ms-level stability in std(theta), K may need to be VERY large.\n');
-    fprintf('  For relocation weights, relative scaling often matters more than absolute calibration.\n\n');
-end
 
 % ---------- STEP 0: read catalog max ID ----------
 fprintf('Reading %s to get max EventID...\n', catalog_file);
@@ -128,6 +122,8 @@ fidm = fopen(metrics_file,'w'); assert(fidm>0);
 fprintf(fidm,'# ddsync metrics\n');
 fprintf(fidm,'# K_SIGMA=%g MIN_EDGES=%d IRLS_ITERS=%d C_HUBER=%g MODE=%s STD_EXPORT=%d STD_MODE=%s STD_PROBES=%d\n', ...
     K_SIGMA, MIN_EDGES, IRLS_ITERS, C_HUBER, OUTPUT_WEIGHT_MODE, EXPORT_THETA_STD, THETASTD_MODE, STD_PROBES);
+fprintf(fidm,'# STD_MIN_PROBES=%d STD_REL_TOL=%g STD_BATCH=%d STD_FALLBACK=%s STD_EXACT_MAX_NRED=%d\n', ...
+    cfg.std.hutch.min_probes, cfg.std.hutch.rel_tol, STD_BATCH, THETASTD_FALLBACK, cfg.std.exact_max_nred);
 fprintf(fidm,'group\tn_edges\tn_kept\tpruned_pct\trobust_p50\trobust_p05\trobust_p95\tfrac_robust_lt_0p99\tsigma_hat\n');
 
 for g=1:nGroups
@@ -155,13 +151,21 @@ for g=1:nGroups
             STD_PROBES, STD_PROBE_DIST, STD_BATCH, STD_REPORT_EVERY_BATCH, ...
             STD_MAX_NRED, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_MIN_DIAGREL, ...
             PSEUDO_WEIGHT_SOURCE, PSEUDO_WEIGHT_EPS, ...
-            THETASTD_SCALE_FIXED);
+            THETASTD_SCALE_FIXED, cfg.std.hutch.min_probes, cfg.std.hutch.rel_tol, cfg.std.exact_max_nred, WRITE_ALT_NODE_WEIGHTCOL);
 
     if pseudo_info.used_pseudo
         nPseudoGroups = nPseudoGroups + 1;
         nPseudoComps  = nPseudoComps + pseudo_info.n_pseudo_comps;
     end
 
+    for d = pseudo_info.components
+        fprintf(fidm,'# std_component group=%s ref=%d nodes=%d method=%s reason=%s probes=%d max_rel_se=%.6g\n', ...
+            key, d.ref, d.nodes, d.method, d.reason, d.probes, d.max_rel_se);
+        if ~ismember(d.reason, {'converged','requested'})
+            fprintf('  [STD] ref=%d: %s; method=%s, probes=%d, max_rel_se=%.3g\n', ...
+                d.ref, d.reason, d.method, d.probes, d.max_rel_se);
+        end
+    end
     n_kept = sum(keep_mask);
     overall_kept = overall_kept + n_kept;
 
@@ -194,8 +198,8 @@ for g=1:nGroups
     if n_kept>0
         rob_kept = wrob(keep_mask);
         r50 = median(rob_kept);
-        r05 = prctile(rob_kept,5);
-        r95 = prctile(rob_kept,95);
+        r05 = percentile(rob_kept,5);
+        r95 = percentile(rob_kept,95);
         frac_dw = mean(rob_kept < 0.99);
     else
         r50=NaN; r05=NaN; r95=NaN; frac_dw=NaN;
@@ -329,7 +333,7 @@ if cfg.output.write_dt_sync
                 sf = std_fulls{g};
                 s_i = double(sf(cur_i));
                 s_j = double(sf(cur_j));
-                std_dt = sqrt(max(0, s_i.^2 + s_j.^2)); % conservative (cov ignored)
+                std_dt = hypot(s_i,s_j); % covariance ignored; NaN remains unavailable
                 if std_dt<=0 || ~isfinite(std_dt)
                     w_out = 0;
                 else
@@ -489,6 +493,8 @@ function writeThetaStdWithDegree(fn, std_full, ref_full, deg_full, scale_fixed, 
             else
                 fprintf(fid, fmt5, ev, s, r, d, wtheta);
             end
+        elseif write_alt_wcol
+            fprintf(fid, fmt5, ev, s, r, d, nodew_full(ev));
         else
             fprintf(fid, fmt4, ev, s, r, d);
         end
@@ -567,8 +573,9 @@ function scale = computeThetaStdMedianScale(infile_dt, key2g, decFiles, std_full
         sf = std_fulls{g};
         s_i = double(sf(cur_i));
         s_j = double(sf(cur_j));
-        std_dt = sqrt(max(0, s_i.^2 + s_j.^2));
-        std_dt = max(std_dt, 1e-12);
+        if ~isfinite(s_i) || ~isfinite(s_j), continue; end
+        std_dt = hypot(s_i,s_j);
+        if std_dt<=0 || ~isfinite(std_dt), continue; end
         vals(end+1,1) = 1/std_dt; %#ok<AGROW>
 
         if numel(vals) >= vals_cap, break; end
@@ -586,256 +593,128 @@ function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full
         EXPORT_THETA_STD, THETASTD_MODE, THETASTD_FALLBACK, ...
         STD_PROBES, STD_PROBE_DIST, STD_BATCH, STD_REPORT_EVERY_BATCH, ...
         STD_MAX_NRED, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_MIN_DIAGREL, ...
-        PSEUDO_WEIGHT_SOURCE, PSEUDO_WEIGHT_EPS, THETASTD_SCALE_FIXED)
+        PSEUDO_WEIGHT_SOURCE, PSEUDO_WEIGHT_EPS, THETASTD_SCALE_FIXED, STD_MIN_PROBES, STD_REL_TOL, STD_EXACT_MAX_NRED, WRITE_ALT_NODEW_COL)
 
     ev_all = unique([gi(:); gj(:)]);
     nNodes = numel(ev_all);
-    [~, li] = ismember(gi, ev_all);
-    [~, lj] = ismember(gj, ev_all);
+    [~, li] = ismember(gi,ev_all); [~, lj] = ismember(gj,ev_all);
+    theta_local = NaN(nNodes,1); ref_local = NaN(nNodes,1);
+    std_local = NaN(nNodes,1); nodew_local = NaN(nNodes,1);
+    deg_local = zeros(nNodes,1,'uint32');
+    keep_mask = isfinite(w_base) & w_base>0 & isfinite(gd);
+    wrob_full = zeros(numel(gd),1);
+    pseudo_info = struct('used_pseudo',false,'n_pseudo_comps',0,'components',struct([]));
+    comp_sigma = [];
 
-    theta_local = NaN(nNodes,1);
-    ref_local   = NaN(nNodes,1);
-    std_local   = NaN(nNodes,1);
-    deg_local   = zeros(nNodes,1,'uint32');
-    nodew_local = NaN(nNodes,1); % optional per-node weight summary
-
-    pseudo_info = struct('used_pseudo',false,'n_pseudo_comps',0);
-
-    keep_mask = (w_base(:) > 0);     % never keep zero-weight edges
-    wrob_full = ones(numel(gd),1);
-    wrob_full(~keep_mask) = 0;
-
-
-    valid_edges = (w_base(:) > 0);
-    comps = uf_components(nNodes, li(valid_edges), lj(valid_edges));
-    nComp = max(comps);
-
-    sigma_hat_global = NaN;
-    comp_sigma = NaN(nComp,1);
-    comp_w     = zeros(nComp,1);
-
-
-    for c=1:nComp
-        nodes_c = find(comps==c);
-        n_c = numel(nodes_c);
-
-        % edges that lie within this connected component (fast label test)
-    % Only consider positive-weight edges when deciding if a component is usable
-    mE = (comps(li) == c) & (comps(lj) == c) & (w_base(:) > 0);
-
-    if ~any(mE)
-        % Nothing usable in this component: leave NaNs in theta/std, and drop edges (already dropped by keep_mask init)
-        continue;
+    % First pass: initial component gate, then residual-based pruning.
+    comps = uf_components(nNodes,li(keep_mask),lj(keep_mask));
+    for c=1:max(comps)
+        nodes = find(comps==c);
+        edges = find(keep_mask & comps(li)==c & comps(lj)==c);
+        if numel(edges)<MIN_EDGES || numel(edges)<numel(nodes)
+            keep_mask(edges)=false;
+            continue;
+        end
+        map=zeros(nNodes,1); map(nodes)=1:numel(nodes);
+        a=map(li(edges)); b=map(lj(edges));
+        degree=accumarray([a;b],1,[numel(nodes),1]);
+        [~,pin]=max(degree); free=setdiff(1:numel(nodes),pin);
+        theta=solvePinnedLS(numel(nodes),a,b,gd(edges),w_base(edges),pin,free,RIDGE_EPS);
+        r=theta(a)-theta(b)-gd(edges);
+        scale=1.4826*median(abs(r-median(r)));
+        if scale==0 || ~isfinite(scale), scale=max(ROBUST_MIN_SCALE,std(r)); end
+        keep_mask(edges)=abs(r)<=K_SIGMA*max(scale,ROBUST_MIN_SCALE);
     end
 
-    % Component microfamily gate:
-    % Require (i) enough edges and (ii) at least one cycle (redundancy beyond a tree)
-    nE = sum(mE);
-    redundancy = nE - (n_c - 1);   % = 0 for a tree, >0 means at least one loop
-
-    if (nE < MIN_EDGES) || (redundancy < 1)
-        % Too small / no redundancy => do not trust theta/std for this component.
-        % Drop its edges from dt output and keep NaNs in theta/std arrays.
-        idx_e = find(mE);
-        keep_mask(idx_e) = false;
-        wrob_full(idx_e) = 0;
-        deg_local(nodes_c) = uint32(0);
-        continue;
-    end
-
-
-        a_all = li(mE); b_all = lj(mE);
-        dt_k  = gd(mE);
-        wb_k  = w_base(mE);
-
-        map = zeros(nNodes,1);
-        map(nodes_c) = 1:n_c;
-        a = map(a_all); b = map(b_all);
-
-        deg0 = accumarray([a(:); b(:)], 1, [n_c,1]);
-        [~, pin] = max(deg0);
-        keep_idx = setdiff(1:n_c, pin);
-
-        theta_c = solvePinnedLS(n_c, a, b, dt_k, wb_k, pin, keep_idx, RIDGE_EPS);
-        r = (theta_c(a) - theta_c(b)) - dt_k;
-
-        % prune
-        if numel(r) >= MIN_EDGES
-            s0 = 1.4826*mad(r,1);
-            if s0==0 || ~isfinite(s0), s0 = max(ROBUST_MIN_SCALE, std(r)); end
-            s0 = max(s0, ROBUST_MIN_SCALE);
-            bad = abs(r) > K_SIGMA*s0;
+    % Rebuild components from surviving edges before fitting/exporting anything.
+    comps=uf_components(nNodes,li(keep_mask),lj(keep_mask));
+    for c=1:max(comps)
+        nodes_c=find(comps==c); n_c=numel(nodes_c);
+        idx_e=find(keep_mask & comps(li)==c & comps(lj)==c);
+        % Repeat the microfamily gate; isolated/unsupported rows stay NaN.
+        if numel(idx_e)<MIN_EDGES || numel(idx_e)<n_c
+            keep_mask(idx_e)=false;
+            continue;
+        end
+        map=zeros(nNodes,1); map(nodes_c)=1:n_c;
+        a=map(li(idx_e)); b=map(lj(idx_e));
+        dt_k=gd(idx_e); wb_k=w_base(idx_e);
+        deg_kept=accumarray([a;b],1,[n_c,1]);
+        [~,pin]=max(deg_kept); % surviving degree; ties use smallest event ID
+        keep_idx=setdiff(1:n_c,pin);
+        w_eff=wb_k; wrob_c=ones(numel(idx_e),1);
+        theta_c=solvePinnedLS(n_c,a,b,dt_k,w_eff,pin,keep_idx,RIDGE_EPS);
+        Jprev=Inf;
+        for it=1:IRLS_ITERS
+            r=theta_c(a)-theta_c(b)-dt_k;
+            scale=max(residualScale(r,w_eff),ROBUST_MIN_SCALE);
+            wrob_c=huberWeight(r/scale,C_HUBER); w_eff=wb_k.*wrob_c;
+            % Fit the same final weights used for covariance and output.
+            theta_c=solvePinnedLS(n_c,a,b,dt_k,w_eff,pin,keep_idx,RIDGE_EPS);
+            r=theta_c(a)-theta_c(b)-dt_k;
+            J=sum(w_eff.*r.^2);
+            if isfinite(Jprev) && abs(Jprev-J)<=IRLS_REL_TOL*max(Jprev,eps), break; end
+            Jprev=J;
+        end
+        r=theta_c(a)-theta_c(b)-dt_k;
+        sigma_hat=residualScale(r,w_eff); comp_sigma(end+1)=sigma_hat;
+        deg_local(nodes_c)=uint32(deg_kept);
+        nodew_c=NaN(n_c,1);
+        if strcmpi(THETASTD_MODE,'pseudo_weight') || strcmpi(THETASTD_FALLBACK,'pseudo_weight') || WRITE_ALT_NODEW_COL
+            switch lower(PSEUDO_WEIGHT_SOURCE)
+                case 'base', src=wb_k;
+                case 'robust', src=wrob_c;
+                otherwise, src=w_eff;
+            end
+            nodew_c=accumarray([a;b],[src;src],[n_c,1])./deg_kept;
+            nodew_local(nodes_c)=nodew_c;
+        end
+        std_c=NaN(n_c,1);
+        info=struct('method','disabled','reason','requested','probes',0,'max_rel_se',NaN);
+        if EXPORT_THETA_STD
+            opts=struct('mode',lower(THETASTD_MODE),'fallback',lower(THETASTD_FALLBACK), ...
+                'probes',STD_PROBES,'probe_dist',lower(STD_PROBE_DIST),'batch',STD_BATCH, ...
+                'report_every_batch',STD_REPORT_EVERY_BATCH,'max_nred',STD_MAX_NRED, ...
+                'min_probes',STD_MIN_PROBES,'rel_tol',STD_REL_TOL,'exact_max_nred',STD_EXACT_MAX_NRED);
+            [std_c,info]=ddsync.estimate_theta_std(n_c,a,b,w_eff,pin,keep_idx,RIDGE_EPS, ...
+                sigmaForThetaStd(sigma_hat,STD_MIN_SIGMA,STD_APPLY_MIN_SIGMA),opts);
+            if strcmp(info.method,'pseudo_degree')
+                std_c=sigmaForThetaStd(sigma_hat,STD_MIN_SIGMA,STD_APPLY_MIN_SIGMA)./sqrt(deg_kept);
+            elseif strcmp(info.method,'pseudo_weight')
+                std_c=1./(max(nodew_c,PSEUDO_WEIGHT_EPS)*THETASTD_SCALE_FIXED);
+            end
+            if ismember(info.method,{'pseudo_degree','pseudo_weight'})
+                pseudo_info.used_pseudo=true;
+                pseudo_info.n_pseudo_comps=pseudo_info.n_pseudo_comps+1;
+            end
+            std_c(pin)=0; % gauge constraint, not an observation of zero noise
+        end
+        info.ref=ev_all(nodes_c(pin)); info.nodes=n_c;
+        if isempty(pseudo_info.components)
+            pseudo_info.components=info;
         else
-            bad = false(numel(r),1);
+            pseudo_info.components(end+1)=info;
         end
-        keep_c = ~bad;
-
-        % LS pruned
-        w_eff = wb_k .* keep_c;
-        theta_c = solvePinnedLS(n_c, a, b, dt_k, w_eff, pin, keep_idx, RIDGE_EPS);
-
-        % IRLS
-        wrob_c = ones(numel(dt_k),1);
-        if IRLS_ITERS>0
-            Jprev = inf;
-            for it=1:IRLS_ITERS
-                r = (theta_c(a) - theta_c(b)) - dt_k;
-                % robust scale on a "high-weight" subset to avoid inflation
-                ww = w_eff(:);
-                pos = (ww > 0);
-                if any(pos)
-                    medw = median(ww(pos));
-                    use = pos & (ww >= 0.5*medw);
-                    if any(use)
-                        s = 1.4826*mad(r(use),1);
-                    else
-                        s = 1.4826*mad(r(pos),1);
-                    end
-                    if s==0 || ~isfinite(s), s = max(ROBUST_MIN_SCALE, std(r(pos))); end
-                else
-                    s = ROBUST_MIN_SCALE;
-                end
-                s = max(s, ROBUST_MIN_SCALE);
-                rs = r./s;
-
-                wrob_c = huberWeight(rs, C_HUBER);
-                w_eff  = wb_k .* keep_c .* wrob_c;
-
-                J = sum(w_eff .* (r.^2));  % weighted LS objective
-                if isfinite(Jprev) && (Jprev - J) <= IRLS_REL_TOL*max(Jprev,eps)
-                    break;
-                end
-                Jprev = J;
-
-                theta_c = solvePinnedLS(n_c, a, b, dt_k, w_eff, pin, keep_idx, RIDGE_EPS);
-            end
-        end
-
-        % final sigma_hat (again using higher-weight subset)
-        r = (theta_c(a) - theta_c(b)) - dt_k;
-        ww = w_eff(:);
-        pos = (ww > 0);
-        if any(pos)
-            medw = median(ww(pos));
-            use = pos & (ww >= 0.5*medw);
-            if any(use)
-                sigma_hat = 1.4826*mad(r(use),1);
-            else
-                sigma_hat = 1.4826*mad(r(pos),1);
-            end
-            if sigma_hat==0 || ~isfinite(sigma_hat), sigma_hat = std(r(pos)); end
-            if ~isfinite(sigma_hat) || sigma_hat < 0, sigma_hat = 0; end
-        else
-            sigma_hat = NaN;
-        end
-        sigma_hat_global = sigma_hat;
-        comp_sigma(c) = sigma_hat;
-
-        % degree (kept graph, unweighted count)
-        kept = (w_eff > 0);
-        comp_w(c)     = sum(kept);
-        deg_kept = accumarray([a(kept); b(kept)], 1, [n_c,1]);
-        deg_local(nodes_c) = uint32(deg_kept);
-
-        % theta std / pseudo std
-        std_c = NaN(n_c,1);
-        nodew_c = NaN(n_c,1);
-
-        % Build a per-node weight summary if requested/needed.
-        % For pseudo_weight: derive node weight from incident edge weights on kept edges.
-        if ismember(lower(string(THETASTD_MODE)), ["pseudo_weight","hutch"]) || ismember(lower(string(THETASTD_FALLBACK)), ["pseudo_weight"])
-            kept_for_nodew = (w_eff > 0);
-            if any(kept_for_nodew)
-                aa = a(kept_for_nodew); bb = b(kept_for_nodew);
-                switch lower(string(PSEUDO_WEIGHT_SOURCE))
-                    case "base"
-                        ww = wb_k(kept_for_nodew);
-                    case "robust"
-                        ww = wrob_c(kept_for_nodew);
-                    otherwise % 'combined'
-                        ww = w_eff(kept_for_nodew);
-                end
-                sumw = accumarray([aa; bb], [ww; ww], [n_c 1], @sum, 0);
-                cntw = accumarray([aa; bb], 1, [n_c 1], @sum, 0);
-                nodew_c = sumw ./ max(cntw, 1);
-            else
-                nodew_c(:) = 0;
-            end
-        end
-
-        % Decide whether to run Hutch or pseudo.
-        run_hutch = EXPORT_THETA_STD && strcmpi(THETASTD_MODE,'hutch') && (STD_PROBES>0) && (numel(keep_idx) <= STD_MAX_NRED);
-
-        if EXPORT_THETA_STD && strcmpi(THETASTD_MODE,'none')
-            std_c(:) = NaN;
-        elseif run_hutch
-            std_c = estimateThetaStdHutch(n_c, a, b, w_eff, pin, keep_idx, RIDGE_EPS, ...
-                sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_PROBES, STD_PROBE_DIST, STD_BATCH, STD_REPORT_EVERY_BATCH, STD_MIN_DIAGREL);
-        else
-            % Hutch skipped (either disabled, too large, or mode not hutch): use fallback
-            use_mode = lower(string(THETASTD_MODE));
-            if strcmpi(use_mode,'hutch')
-                use_mode = lower(string(THETASTD_FALLBACK));
-                if (numel(keep_idx) > STD_MAX_NRED)
-                    warning('[THETASTD] Hutch std skipped (Nred=%d > STD_MAX_NRED=%d). Using fallback=%s.', numel(keep_idx), STD_MAX_NRED, use_mode);
-                elseif (STD_PROBES<=0)
-                    warning('[THETASTD] Hutch std disabled (probes<=0). Using fallback=%s.', use_mode);
-                end
-            end
-
-            if EXPORT_THETA_STD && strcmpi(use_mode,'pseudo_degree')
-                % Pseudo std from degree: sigma_hat / sqrt(deg)
-                degv = max(double(deg_kept), 1);
-                sig = sigmaForThetaStd(sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA);
-                std_c = sig ./ sqrt(degv);
-                std_c(pin) = 0; % keep gauge semantics (theta(pin)=0)
-                pseudo_info.used_pseudo = true;
-                pseudo_info.n_pseudo_comps = pseudo_info.n_pseudo_comps + 1;
-            elseif EXPORT_THETA_STD && strcmpi(use_mode,'pseudo_weight')
-                % Pseudo std from node weight: std = 1/(w * THETASTD_SCALE_FIXED)
-                wnode = max(nodew_c, PSEUDO_WEIGHT_EPS);
-                std_c = 1 ./ (wnode * THETASTD_SCALE_FIXED);
-                std_c(pin) = 0; % gauge
-                pseudo_info.used_pseudo = true;
-                pseudo_info.n_pseudo_comps = pseudo_info.n_pseudo_comps + 1;
-            else
-                % NaN fallback
-                if EXPORT_THETA_STD
-                    std_c(:)=NaN; std_c(pin)=0;
-                end
-            end
-        end
-
-
-        theta_local(nodes_c) = theta_c(:);
-        ref_local(nodes_c) = nodes_c(pin);
-        if EXPORT_THETA_STD, std_local(nodes_c) = std_c(:); end
-        nodew_local(nodes_c) = nodew_c(:);
-
-        idx_e = find(mE);
-        keep_mask(idx_e) = keep_c;
-        wrob_full(idx_e) = wrob_c;
-        wrob_full(idx_e(~keep_c)) = 0;
+        theta_local(nodes_c)=theta_c; ref_local(nodes_c)=ev_all(nodes_c(pin));
+        std_local(nodes_c)=std_c; wrob_full(idx_e)=wrob_c;
     end
+    good=comp_sigma(isfinite(comp_sigma));
+    sigma_hat_global=NaN;
+    if ~isempty(good), sigma_hat_global=median(good); end
+    theta_full=NaN(maxEventID,1); ref_full=NaN(maxEventID,1);
+    std_full=NaN(maxEventID,1); nodew_full=NaN(maxEventID,1);
+    deg_full=zeros(maxEventID,1,'uint32');
+    theta_full(ev_all)=theta_local; ref_full(ev_all)=ref_local;
+    std_full(ev_all)=std_local; nodew_full(ev_all)=nodew_local; deg_full(ev_all)=deg_local;
+end
 
-    % Representative sigma_hat per group (for reporting only).
-    good = (comp_w > 0) & isfinite(comp_sigma);
-    if any(good)
-        sigma_hat_global = median(comp_sigma(good));
-    end
-
-    theta_full = NaN(maxEventID,1);
-    ref_full   = NaN(maxEventID,1);
-    std_full   = NaN(maxEventID,1);
-    nodew_full = NaN(maxEventID,1);
-    deg_full   = zeros(maxEventID,1,'uint32');
-
-    theta_full(ev_all) = theta_local;
-    maskRef = isfinite(ref_local) & (ref_local >= 1) & (ref_local <= numel(ev_all));
-    ref_full(ev_all(maskRef)) = ev_all(ref_local(maskRef));
-    if EXPORT_THETA_STD, std_full(ev_all) = std_local; end
-    nodew_full(ev_all) = nodew_local;
-    deg_full(ev_all)   = deg_local;
+function s = residualScale(r,w)
+    pos=isfinite(w) & w>0;
+    if ~any(pos), s=NaN; return; end
+    use=pos & w>=0.5*median(w(pos));
+    s=1.4826*median(abs(r(use)-median(r(use))));
+    if s==0 || ~isfinite(s), s=std(r(pos)); end
+    if ~isfinite(s) || s<0, s=NaN; end
 end
 
 function theta = solvePinnedLS(n_c, a, b, dt_k, w, pin, keep_idx, RIDGE_EPS)
@@ -913,97 +792,18 @@ function sigma_std = sigmaForThetaStd(sigma_hat, minSigma, applyMinSigma)
     if isfinite(sigma_hat) && sigma_hat >= 0
         sigma_std = sigma_hat;
     else
-        sigma_std = 0;
+        sigma_std = NaN;
+        return;
     end
     if applyMinSigma && isfinite(minSigma) && minSigma > 0
         sigma_std = max(sigma_std, minSigma);
     end
 end
 
-function std_c = estimateThetaStdHutch(n_c, a, b, w_eff, pin, keep_idx, RIDGE_EPS, ...
-                                      sigma_hat, minSigma, applyMinSigma, K, dist, batch, reportEvery, minDiagRel)
-    a=a(:); b=b(:); w_eff=w_eff(:);
-    valid = (w_eff>0);
-    aa=a(valid); bb=b(valid); ww=w_eff(valid);
-
-    Wadj = sparse([aa; bb],[bb; aa],[ww; ww], n_c, n_c);
-    dsum = sum(Wadj,2);
-    L = spdiags(dsum,0,n_c,n_c) - Wadj;
-
-    keep_idx = keep_idx(:);
-    Lred = L(keep_idx,keep_idx) + RIDGE_EPS*speye(numel(keep_idx));
-
-    % Prefer chol if possible (fast, deterministic)
-    useChol = true;
-    try
-        R = chol(Lred,'lower');
-    catch
-        useChol = false;
-    end
-
-    nred = numel(keep_idx);
-    diag_est = zeros(nred,1);
-    nDone = 0;
-
-    nBatches = ceil(K/batch);
-    for bi=1:nBatches
-        thisK = min(batch, K - nDone);
-        if thisK<=0, break; end
-
-        % Draw thisK probe vectors (columns). Use rademacher probes by default for lower variance.
-        switch lower(dist)
-            case 'rademacher'
-                Z = sign(randn(nred, thisK));
-                Z(Z==0) = 1;
-            case 'gaussian'
-                Z = randn(nred, thisK);
-            otherwise
-                error('STD_PROBE_DIST must be rademacher or gaussian');
-        end
-
-        % Solve Lred * X = Z for multiple RHS at once when possible (much faster than per-probe loops).
-        if useChol
-            X = R' \ (R \ Z);
-        else
-            X = zeros(nred, thisK);
-            for t = 1:thisK
-                z = Z(:,t);
-                [x, flag] = pcg(Lred, z, 1e-8, 300);
-                if flag ~= 0
-                    % last-resort direct solve (slow but safe)
-                    x = Lred \ z;
-                end
-                X(:,t) = x;
-            end
-        end
-
-        % Hutchinson diagonal estimator: diag(Lred^{-1}) = E[ X .* Z ] (elementwise).
-        diag_est = diag_est + sum(X .* Z, 2);
-
-        nDone = nDone + thisK;
-
-        if reportEvery>0 && mod(bi, reportEvery)==0
-            tmp = diag_est / max(nDone,1);
-            fprintf('    Hutch diag: %d/%d probes (median diag ~ %.3e)\n', nDone, K, median(abs(tmp)));
-        end
-    end
-
-    diag_est = diag_est / max(nDone,1);
-
-    % Avoid hard zeros due to finite-K noise:
-    %  - don’t clamp to 0 aggressively
-    %  - instead floor relative to median magnitude
-    medDiag = median(abs(diag_est));
-    floorDiag = max(medDiag * minDiagRel, 0);
-    diag_est = max(diag_est, floorDiag);
-
-    sigma_std = sigmaForThetaStd(sigma_hat, minSigma, applyMinSigma);
-
-    var_red = (sigma_std^2) * diag_est;
-    var_red = max(var_red, 0);
-    std_red = sqrt(var_red);
-
-    std_c = NaN(n_c,1);
-    std_c(pin)=0;
-    std_c(keep_idx)=std_red;
+function value = percentile(x,p)
+    x=sort(x(isfinite(x)));
+    if isempty(x), value=NaN; return; end
+    rank=1+(numel(x)-1)*p/100;
+    low=floor(rank);high=ceil(rank);
+    value=x(low)+(rank-low)*(x(high)-x(low));
 end

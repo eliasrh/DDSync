@@ -25,9 +25,10 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % cfg.robust.irls_iters = 10;
 % cfg.robust.min_scale  = 5e-4; % robust scale floor for pruning/IRLS only
 
-% Example: disable expensive Hutch std and use pseudo-degree fallback
+% Optional: a fast weighting proxy (not a statistical uncertainty)
 % cfg.std.mode = 'pseudo_degree';
-% cfg.std.fallback = 'pseudo_degree';
+% cfg.std.fallback = 'exact'; % also handles negative/unconverged estimates
+% cfg.std.exact_max_nred = 2048;
 % cfg.std.min_sigma = 5e-4;       % residual-noise floor for exported std_theta
 % cfg.std.apply_min_sigma = true; % set false (or min_sigma=[]/0) to disable
 
@@ -37,5 +38,12 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % Example: preserve microsecond/sub-microsecond values in text outputs
 % cfg.output.theta_decimals = 12;
 % cfg.output.thetastd_decimals = 12;
+% Adaptive Hutchinson: maximum budget, early convergence checks, safe fallback.
+% cfg.std.hutch.probes = 2048;
+% cfg.std.hutch.min_probes = 128;
+% cfg.std.hutch.rel_tol = 0.10;
+% Read # std_component diagnostics in sync_metrics.txt before using uncertainties.
+% See ../docs/uncertainty.md for probe selection and fallback behavior.
+
 
 end

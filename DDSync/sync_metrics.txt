@@ -1,3 +1,5 @@
+# Historical example output from before the 18 October 2026 fixes.
+# Rerun DDSync to generate current component and uncertainty diagnostics.
 # ddsync metrics
 # K_SIGMA=8 MIN_EDGES=30 IRLS_ITERS=10 C_HUBER=1.345 MODE=thetaStd STD_EXPORT=1 STD_MODE=hutch STD_PROBES=100000
 group	n_edges	n_kept	pruned_pct	robust_p50	robust_p05	robust_p95	frac_robust_lt_0p99	sigma_hat

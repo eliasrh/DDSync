@@ -14,10 +14,9 @@ url: "https://github.com/eliasrh/DDSync"
 # Make sure this matches your LICENSE file wording.
 license: "LicenseRef-DDSync-NonCommercial-1.0"
 
-# Update these to match your GitHub release + Zenodo record:
+# Metadata for the archived 0.1.0 software release; the working main branch may be newer.
 version: "0.1.0"
 date-released: "2026-02-14"
-doi: "10.5281/zenodo.XXXXXXXX"  # <-- version DOI for this release
 
 keywords:
   - seismology
@@ -35,13 +34,6 @@ abstract: >
   least-squares synchronization problem to recover self-consistent relative arrival-time potentials,
   provides residual-based pruning using MAD thresholds, supports optional Huber IRLS reweighting,
   and can export thetaStd-based uncertainty diagnostics for downstream weighting.
-
-# Optional: include both the concept DOI (all versions) and the version DOI (this release).
-# identifiers:
-#   - type: doi
-#     value: 10.5281/zenodo.XXXXXXXX  # version DOI
-#   - type: doi
-#     value: 10.5281/zenodo.YYYYYYYY  # concept DOI (all versions)
 
 preferred-citation:
   type: software

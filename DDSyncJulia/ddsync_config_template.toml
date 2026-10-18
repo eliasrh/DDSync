@@ -7,6 +7,8 @@
 #   julia run_ddsync.jl myconfig.toml dt.cc catalog.txt
 #
 # Any fields you omit will fall back to DDSync.config_default().
+# Paths are relative to your working directory, not this TOML file.
+# Use a separate output directory per run; matching outputs are overwritten.
 
 [io]
 # infile_dt = "dt.cc"
@@ -55,20 +57,27 @@
 
 [std]
 export = true
-mode = "hutch"                 # "hutch" | "pseudo_degree" | "pseudo_weight" | "none"
-fallback = "pseudo_degree"     # used if hutch is skipped (e.g., probes=0 or too large system)
+mode = "hutch"                 # "hutch" | "exact" | "graph_bound" | "pseudo_degree" | "pseudo_weight" | "none"
+fallback = "exact"             # also triggered by negative/nonfinite or unconverged estimates and solve failures
+exact_max_nred = 2048            # bound exact fallback cost; beyond this, use a finite conservative graph bound
 
-# Enable Hutchinson by setting probes > 0.
-# NOTE: This can be expensive for large station-phase groups.
-probes = 100000
+# probes is a MAXIMUM budget, not a claim of convergence. Stops early when
+# every unpinned node has relative MC standard error <= rel_tol.
+# 128 may suffice on favorable graphs; inspect # std_component in metrics.
+# Raise the budget (e.g. 8192) for nonconverged large components.
+# A nonpositive estimate at the budget limit uses fallback; it is never floored.
+# See ../docs/uncertainty.md. Set probes=0 to use fallback directly.
+probes = 2048
+min_probes = 128
+rel_tol = 0.10                  # MC SE / diagonal; not a guaranteed relative error bound
 probe_dist = "rademacher"       # "rademacher" | "gaussian"
 
-batch = 250
+batch = 128
 report_every_batch = 10
 max_nred = 40000
 min_sigma = 5e-4             # residual-noise floor for exported std_theta
 apply_min_sigma = true       # false (or min_sigma=0) disables the std_theta floor
-min_diag_rel = 1e-12
+# min_diag_rel = 1e-12        # deprecated and ignored; no clipping of failed variances
 
 # For pseudo_weight (and optional alt column): per-node weight estimated from incident edges.
 # pseudo_weight_source = "combined"   # "base" | "robust" | "combined"

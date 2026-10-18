@@ -1,5 +1,7 @@
 # DDSync (Julia)
 
+Julia is the primary implementation. MATLAB receives bug fixes. See the [18 October 2026 update report](../docs/updates/2026-10-18-pruning-uncertainty.md) and the [uncertainty and probe guide](../docs/uncertainty.md).
+
 DDSync reads a HypoDD/GrowClust-style `dt.cc` file, processes one station-phase group at a time, and writes a cleaned and synchronized differential-time file. For each station and phase, it estimates one relative arrival-time value, `theta`, for every event that can be constrained by the data. A kept observation between events `i` and `j` is then represented by `theta(i) - theta(j)`.
 
 The MATLAB and Julia versions use the same synchronization defaults and
@@ -15,7 +17,7 @@ From inside the `DDSyncJulia/` folder:
 
 ```bash
 cp ddsync_config_template.toml ddsync_config.toml
-julia run_ddsync.jl
+julia run_ddsync.jl ddsync_config.toml ../DDSync/dt.cc ../DDSync/catalog.txt
 ```
 
 You can also pass the config file and input paths explicitly:
@@ -24,7 +26,9 @@ You can also pass the config file and input paths explicitly:
 julia run_ddsync.jl ddsync_config.toml dt.cc catalog.txt
 ```
 
-For a fast first run on a large file, disable Hutchinson standard deviations and use the degree proxy in the TOML file:
+The command above uses the bundled example. Replace those two input paths for your own data. Relative paths in TOML are resolved from your working directory, not the config file directory. Use separate output directories for each run; existing output files with matching names are overwritten and old group files are not automatically removed.
+
+The default uses up to 2048 probes with convergence checks and an exact fallback for at most 2048 unpinned nodes. For fast exploratory weighting on a large file, you can explicitly choose a degree proxy; it is not a statistical uncertainty:
 
 ```toml
 [std]
@@ -36,7 +40,7 @@ fallback = "pseudo_degree"
 
 ## Requirements
 
-- Julia.
+- Julia 1.10 or later (tested in CI on 1.10 and the current stable release).
 - Only Julia standard libraries are used.
 - Unique decimal integer event IDs in the final catalog column. Large,
   non-sequential, zero and negative external IDs are supported through
@@ -171,7 +175,11 @@ Each file has three columns:
 EventID  theta  refEventID
 ```
 
-`theta` is the relative arrival-time value for that event in seconds. `refEventID` is the pinned reference event used to fix the arbitrary additive offset in that connected component. The pinned event has `theta = 0`. Events that cannot be constrained are written as `NaN`.
+`theta` is a relative arrival-time value in seconds. After pruning, DDSync rebuilds the connected components and selects the event with the highest surviving degree in each component as its reference (ties use the smallest event ID). It refits each component independently and writes that reference in `refEventID`. The reference has `theta = 0`.
+
+Both the minimum-edge gate and the requirement for at least one cycle are checked again after pruning. Isolated events and rejected fragments have `NaN` theta, reference and uncertainty, with degree zero. Their observations are omitted, or written with zero weight when diagnostic pruned output is enabled.
+
+**Compare or subtract theta values only when they belong to the same station, phase and finite `refEventID`.** Different references identify independently floating components. A theta star must connect only an event and its own reference. For a common anchor across stations/channels, check that the target and anchor share a reference in each file before subtracting. Theta is not an absolute pick time.
 
 Each file has one row per catalog event, with internal IDs `1:N`. If mapping
 was needed, both `EventID` and `refEventID` refer to `catalog_seq.txt`.
@@ -190,7 +198,7 @@ Optional columns may be added:
 EventID  std_theta  refEventID  degree  thetaWeight  nodeWeight
 ```
 
-`std_theta` is either a Hutchinson estimate, a fast pseudo standard deviation, or `NaN`, depending on `std.mode` and fallback behavior. `degree` is the number of kept incident edges in the final graph. `thetaWeight` is a practical inverse-uncertainty weight derived from `std_theta`. `nodeWeight` is an optional diagnostic node-weight summary used by `pseudo_weight` mode.
+`std_theta` is either a checked Hutchinson estimate, an exact inverse-diagonal calculation, a conservative graph bound, a fast pseudo standard deviation, or explicitly disabled (`NaN`) uncertainty, depending on `std.mode` and fallback behavior. `degree` is the number of kept incident edges in the final graph. `thetaWeight` is a practical inverse-uncertainty weight derived from `std_theta`. `nodeWeight` is an optional diagnostic node-weight summary used by `pseudo_weight` mode.
 
 ### `sync_metrics.txt`
 
@@ -201,6 +209,8 @@ group    n_edges  n_kept  pruned_pct  robust_p50  robust_p05  robust_p95  frac_r
 ```
 
 `group` is the station-phase key, `n_edges` is the number of input measurements, and `n_kept` is the number retained after component gating and pruning. `sigma_hat` is the final robust residual scale for reporting and for `std_theta` export. It is not the same thing as `std.min_sigma`.
+
+The group `sigma_hat` is the median of the final component scales; each component uses its own scale for uncertainty. Additional `# std_component` comment lines identify the final reference, node count, actual method, fallback reason, probes used and worst relative Monte Carlo standard error. Ignore comment lines when reading the numeric group table. `method=exact` may indicate a successful fallback; `method=graph_bound` identifies a finite conservative fallback that preserves the surviving reference constraints. See the [diagnostic field guide](../docs/uncertainty.md#reading-the-diagnostics).
 
 Comment lines at the top also record the catalog event count, whether IDs
 were remapped, and the paths to any ID map and sequential outputs. Check
@@ -222,7 +232,7 @@ These are digits after the decimal point. With seconds as the unit, 6 decimals i
 
 These settings affect only the `theta` and `std_theta` value columns. The synchronized `dt` column in `dt_sync.cc` is controlled by `output.dt_decimals`, and the weight column in `dt_sync.cc` is controlled by `output.dt_weight_decimals`.
 
-Set both values to `6` if you need the older text-file formatting.
+Set both values to `6` if you need the older text-file formatting. More printed digits do not increase numerical accuracy: temporary observations and pass-2 theta/std storage currently use Float32/single precision. A value printed to nanoseconds is not evidence of nanosecond accuracy.
 
 ---
 
@@ -236,7 +246,7 @@ This protects pruning and IRLS. During outlier detection and Huber reweighting, 
 
 ### `std.min_sigma` and `std.apply_min_sigma`
 
-This applies only when converting the final residual-noise estimate into exported `std_theta` values for Hutchinson and `pseudo_degree` modes.
+This applies only when converting the final residual-noise estimate into exported `std_theta` values for Hutchinson, exact, graph-bound and `pseudo_degree` modes.
 
 ```toml
 [std]
@@ -293,7 +303,7 @@ DDSync never keeps edges whose base weight is non-positive.
 | Field | Default | Plain-language meaning |
 | --- | ---: | --- |
 | `K_SIGMA` | `20.0` | Prune an edge when its residual is larger than this many robust scale units. Smaller values prune more aggressively. |
-| `MIN_EDGES` | `30` | Minimum number of positive-weight edges required before a component is trusted. DDSync also requires at least one loop, meaning more measurements than a bare tree. |
+| `MIN_EDGES` | `30` | Minimum number of positive-weight edges required both before and after pruning for each component. DDSync also requires at least one loop, meaning more measurements than a bare tree. |
 | `min_scale` | `5e-4` | Scale floor used only inside pruning and IRLS to avoid divide-by-zero behavior. |
 
 A practical interpretation: `MIN_EDGES` prevents tiny isolated families from producing overconfident `theta` values. `K_SIGMA` controls how far a measurement can disagree with the internally consistent solution before it is removed.
@@ -337,40 +347,45 @@ A practical interpretation: `MIN_EDGES` prevents tiny isolated families from pro
 | `"base"` | Base weight from `cc`. |
 | `"robust"` | Huber robust weight only. |
 | `"combined"` | Base weight times robust weight. |
-| `"thetaStd"` | Conservative inverse uncertainty for `theta(i)-theta(j)`, scaled and capped. |
+| `"thetaStd"` | Inverse uncertainty proxy for `theta(i)-theta(j)`, scaled and capped; unavailable uncertainty gets weight zero. |
 
-For `thetaStd`, DDSync uses `sqrt(std_theta_i^2 + std_theta_j^2)` and ignores covariance. This is conservative for many relocation-weighting uses.
+For `thetaStd`, DDSync uses `sqrt(std_theta_i^2 + std_theta_j^2)` and ignores covariance. With valid inverse-Laplacian uncertainties this overestimates pair uncertainty when covariance is positive. The pseudo modes do not provide that guarantee. Unavailable uncertainty produces weight zero and is excluded from median scaling. If you disable std export, choose `base`, `robust`, or `combined` output weights instead of `thetaStd`.
 
 ### `[std]` fields
 
 | Field | Default | Plain-language meaning |
 | --- | ---: | --- |
 | `export` | `true` | Create the `thetastd/` directory and write `std_theta_*.txt`. |
-| `mode` | `"hutch"` | Main method for `std_theta`: `"hutch"`, `"pseudo_degree"`, `"pseudo_weight"`, or `"none"`. |
-| `fallback` | `"pseudo_degree"` | Method used when Hutchinson is skipped. Use `"pseudo_degree"`, `"pseudo_weight"`, or `"nan"`. |
-| `min_sigma` | `5e-4` | Optional residual-noise floor used only for exported Hutchinson and `pseudo_degree` `std_theta`. |
+| `mode` | `"hutch"` | Main method for `std_theta`: `"hutch"`, `"exact"`, `"graph_bound"`, `"pseudo_degree"`, `"pseudo_weight"`, or `"none"`. |
+| `fallback` | `"exact"` | Used if Hutchinson is disabled, size-limited, nonpositive/nonfinite, unconverged, or a solve fails. Choose `"exact"`, `"graph_bound"`, `"pseudo_degree"`, or `"pseudo_weight"`. Legacy `"nan"`/`"none"` fallbacks now use `graph_bound`. |
+| `exact_max_nred` | `2048` | Maximum unpinned nodes for exact mode/fallback. Larger or failed exact solves use the finite `graph_bound` fallback. |
+| `min_sigma` | `5e-4` | Optional residual-noise floor used only for exported Hutchinson, exact, graph-bound and `pseudo_degree` `std_theta`. |
 | `apply_min_sigma` | `true` | Switch for `min_sigma`. Set false, or set `min_sigma` to `0`, to disable the export floor. |
 | `pseudo_weight_source` | `"combined"` | Edge weight source for `pseudo_weight` and `nodeWeight`: `"combined"`, `"robust"`, or `"base"`. |
 | `pseudo_weight_eps` | `1e-6` | Minimum node weight before inverting in `pseudo_weight` mode. Prevents division by zero. |
 | `thetastd_write_weightcol` | `true` | Add the practical `thetaWeight` column to `std_theta_*.txt`. |
 | `thetastd_write_alt_node_weightcol` | `false` | Add `nodeWeight` to `std_theta_*.txt`. If `thetastd_write_weightcol` is also true, this is the sixth column; otherwise it is the fifth. |
-| `probes` | `100000` | Number of Hutchinson random probe vectors. Larger is less noisy but slower. Set `0` to skip Hutchinson and use the fallback. |
+| `probes` | `2048` | Maximum Hutchinson probe budget. Stops early if every node passes the diagnostic. Set `0` to use fallback directly. |
+| `min_probes` | `128` | Minimum samples before accepting convergence (at least 2). A smaller maximum budget forces fallback. |
+| `rel_tol` | `0.10` | Maximum empirical standard error divided by estimated diagonal, for every unpinned node. This is not a guaranteed relative error bound. |
 | `probe_dist` | `"rademacher"` | Random probe distribution: `"rademacher"` (`+1/-1`) or `"gaussian"`. |
-| `batch` | `250` | Number of probes solved at once. Larger can be faster but uses more memory. |
+| `batch` | `128` | Number of probes solved at once. Larger can be faster but uses more memory. |
 | `report_every_batch` | `10` | Print progress every this many batches. Set `0` to silence batch progress. |
 | `max_nred` | `40000` | Skip Hutchinson if the reduced system is larger than this many unknowns; use fallback instead. |
-| `min_diag_rel` | `1e-12` | Small relative floor for the estimated inverse-Laplacian diagonal to avoid zero or negative Monte Carlo artifacts. |
+| `min_diag_rel` | `1e-12` | Deprecated and ignored. Invalid variance estimates trigger fallback; they are never clipped to a positive floor. |
 
 Mode meanings:
 
 | Mode | Meaning |
 | --- | --- |
-| `"hutch"` | Estimate the diagonal of the inverse graph Laplacian using random probes. Most statistical, but potentially expensive. |
-| `"pseudo_degree"` | Fast proxy: `std_theta ~= sigma/sqrt(degree)`. Good for large jobs where relative weighting is enough. |
+| `"hutch"` | Estimate the diagonal of the inverse graph Laplacian using random probes. Checks sampling error and uses fallback if skipped or unreliable. |
+| `"exact"` | Compute the inverse-Laplacian diagonal using unit-vector solves, within `exact_max_nred`; no sampling noise. Falls back to a graph bound beyond that limit. |
+| `"graph_bound"` | Finite upper bound from retained path resistances. Preserves supported reference constraints without claiming precision from a failed estimator. |
+| `"pseudo_degree"` | Fast proxy: `std_theta ~= sigma/sqrt(degree)`. A weighting proxy, not a calibrated or conservative uncertainty. |
 | `"pseudo_weight"` | Fast proxy based on incident edge weights, scaled by `thetastd_scale_fixed`. Ignores `min_sigma`. |
-| `"none"` | Do not compute finite standard deviations. If `std.export` is true, files are still written with `NaN` values. |
+| `"none"` | Do not compute finite standard deviations. If `std.export` is true, files are still written with `NaN` for non-reference events and `0` for each reference. |
 
-Hutchinson error decreases slowly, approximately like `1/sqrt(probes)`. For very large station-phase components, `pseudo_degree` is often the practical choice.
+Hutchinson sampling error usually decreases like `1/sqrt(probes)`, with strong graph dependence. See the [shared uncertainty guide](../docs/uncertainty.md) for choosing a budget, checking convergence, and interpreting fallback.
 
 ### `[runtime]` fields
 
@@ -427,11 +442,13 @@ Pruned station lines are then written with weight `0` instead of being omitted.
 
 ## Notes on MATLAB/Julia parity
 
-The numerical formats remain compatible, but automatic ID mapping is specific to Julia. Compare runs using the same compact event IDs in both implementations. Small floating-point differences can occur because MATLAB and Julia use different sparse linear algebra libraries and random-number streams, especially for Hutchinson standard deviations. For deterministic format comparisons, use the same precision settings and prefer `std.mode = "pseudo_degree"`.
+The numerical formats remain compatible, but automatic ID mapping is specific to Julia. Compare runs using the same compact event IDs in both implementations. Small floating-point differences can occur because MATLAB and Julia use different sparse linear algebra libraries and random-number streams, especially for Hutchinson standard deviations. For deterministic comparisons, use the same precision settings and `std.mode = "exact"` on components within the exact size limit.
 
 ## Tests
 
 Run the regression tests from this directory with `julia test/runtests.jl`.
 They exercise large and gapped IDs, unchanged sequential inputs, original
 and sequential outputs, dense and dictionary storage, uncertainty weights,
-and invalid-input protection.
+and invalid-input protection. They also test post-pruning references, isolated and tree fragments, adaptive estimates against an independent dense-inverse oracle, finite conservative fallback and median scaling. Run `julia test/probe_study.jl` for the separate graph/probe-budget study.
+
+For the optional downstream check, run `julia test/graphsplit_integration.jl /path/to/GraphSplit.jl`. It reads forced-failure exports through GraphSplit and checks finite reference constraints and graph rank.

@@ -22,6 +22,7 @@ using Random
 using Printf
 
 include("EventIDs.jl")
+include("Uncertainty.jl")
 
 # ---------------------------- Public API ----------------------------
 
@@ -29,7 +30,7 @@ include("EventIDs.jl")
     config_default() -> Dict{Symbol,Any}
 
 Return a nested configuration dictionary whose fields mirror the MATLAB standalone
-package `+ddsync/config_default.m` (as shipped in DDSync_standalone_fixed.zip).
+package `+ddsync/config_default.m`. Julia uses separate `irls` and `runtime` sections.
 """
 function config_default()
     cfg = Dict{Symbol,Any}()
@@ -82,16 +83,19 @@ function config_default()
 
     cfg[:std] = Dict{Symbol,Any}(
         :export                           => true,
-        :mode                             => "hutch",         # "hutch" | "pseudo_degree" | "pseudo_weight" | "none"
-        :fallback                         => "pseudo_degree", # fallback if "hutch" is skipped
-        :probes                           => 100000,
+        :mode                             => "hutch",         # "hutch" | "exact" | "graph_bound" | "pseudo_degree" | "pseudo_weight" | "none"
+        :fallback                         => "exact",         # skipped/failed Hutch: bounded exact solve, then finite graph bound
+        :probes                           => 2048,           # maximum; stop early when diagnostics pass
+        :min_probes                       => 128,
+        :rel_tol                          => 0.10,           # maximum per-node MC standard error / diagonal
+        :exact_max_nred                   => 2048,
         :probe_dist                       => "rademacher",    # "rademacher" | "gaussian"
-        :batch                            => 250,
+        :batch                            => 128,
         :report_every_batch               => 10,
         :max_nred                         => 40000,
         :min_sigma                        => 5e-4,
         :apply_min_sigma                  => true,
-        :min_diag_rel                     => 1e-12,
+        :min_diag_rel                     => 1e-12,          # deprecated; ignored (no variance clipping)
         :pseudo_weight_source             => "combined",      # "base" | "robust" | "combined"
         :pseudo_weight_eps                => 1e-6,
         :thetastd_write_weightcol         => true,
@@ -126,6 +130,8 @@ function run(cfg::Dict{Symbol,Any}=config_default())
     out_cfg    = cfg[:output]
     std_cfg    = cfg[:std]
     rt_cfg     = cfg[:runtime]
+    validateStdConfig(std_cfg)
+    isfinite(num_cfg[:RIDGE_EPS]) && num_cfg[:RIDGE_EPS] >= 0 || error("numeric.RIDGE_EPS must be finite and nonnegative")
 
     infile_dt    = String(io_cfg[:infile_dt])
     catalog_file = String(io_cfg[:catalog_file])
@@ -224,12 +230,6 @@ function run(cfg::Dict{Symbol,Any}=config_default())
     decision_chunk = Int(rt_cfg[:decision_chunk_records])
     median_cap = Int(rt_cfg[:median_scale_cap])
 
-    if EXPORT_THETA_STD && (THETASTD_MODE == "hutch") && STD_PROBES > 0
-        @printf("\n[STD WARNING]\n")
-        @printf("  Hutchinson diag(inv(L)) convergence is slow: estimator error ~ O(1/sqrt(K)).\n")
-        @printf("  If you want ms-level stability in std(theta), K may need to be VERY large.\n\n")
-    end
-
     # Metrics file
     fidm = open(metrics_file, "w")
     @printf(fidm, "# DDSync metrics
@@ -242,6 +242,8 @@ function run(cfg::Dict{Symbol,Any}=config_default())
 ",
         K_SIGMA, MIN_EDGES, IRLS_ITERS, C_HUBER, mode_print,
         EXPORT_THETA_STD ? 1 : 0, STD_PROBES, dist_print, thetastd_mode_print)
+    @printf(fidm, "# STD_MIN_PROBES=%d STD_REL_TOL=%g STD_BATCH=%d STD_FALLBACK=%s STD_EXACT_MAX_NRED=%d\n",
+        std_cfg[:min_probes], std_cfg[:rel_tol], STD_BATCH, THETASTD_FALLBACK, std_cfg[:exact_max_nred])
     @printf(fidm, "group\tn_edges\tn_kept\tpruned_pct\trobust_p50\trobust_p05\trobust_p95\tfrac_robust_lt_0p99\tsigma_hat\n")
     flush(fidm)
 
@@ -289,8 +291,18 @@ function run(cfg::Dict{Symbol,Any}=config_default())
             PSEUDO_WEIGHT_SOURCE=PSEUDO_WEIGHT_SOURCE, PSEUDO_WEIGHT_EPS=PSEUDO_WEIGHT_EPS,
             THETASTD_SCALE_FIXED=THETASTD_SCALE_FIXED,
             WRITE_ALT_NODEW_COL=WRITE_THETASTD_ALT_NODEW_COL,
+            STD_MIN_PROBES=Int(std_cfg[:min_probes]), STD_REL_TOL=Float64(std_cfg[:rel_tol]),
+            STD_EXACT_MAX_NRED=Int(std_cfg[:exact_max_nred]),
         )
 
+        for info in pseudo_info.components
+            @printf(fidm, "# std_component group=%s ref=%d nodes=%d method=%s reason=%s probes=%d max_rel_se=%.6g\n",
+                key, info.ref, info.nodes, info.method, info.reason, info.probes, info.max_rel_se)
+            if info.reason != "converged" && info.reason != "requested"
+                @printf("  [STD] ref=%d: %s; method=%s, probes=%d, max_rel_se=%.3g\n",
+                    info.ref, info.reason, info.method, info.probes, info.max_rel_se)
+            end
+        end
         n_kept = count(identity, keep_mask)
         overall_kept += n_kept
 
@@ -506,7 +518,7 @@ function run(cfg::Dict{Symbol,Any}=config_default())
                 sstore = std_store[g]
                 si = getStoreValue(sstore, cur_i, store_dense)
                 sj = getStoreValue(sstore, cur_j, store_dense)
-                std_dt = sqrt(max(0.0, si^2 + sj^2))
+                std_dt = hypot(si, sj)
                 if std_dt <= 0.0 || !isfinite(std_dt)
                     w_out = 0.0
                 else
@@ -813,8 +825,9 @@ function computeThetaStdMedianScale(infile_dt::String,
             si = getStoreValue(sstore, cur_i, store_dense)
             sj = getStoreValue(sstore, cur_j, store_dense)
 
-            std_dt = sqrt(max(0.0, si^2 + sj^2))
-            std_dt = max(std_dt, 1e-12)
+            (isfinite(si) && isfinite(sj)) || continue
+            std_dt = hypot(si, sj)
+            (isfinite(std_dt) && std_dt > 0.0) || continue
             v = 1.0 / std_dt
             if isfinite(v) && v > 0.0
                 push!(vals, v)
@@ -1032,309 +1045,177 @@ function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{F
     PSEUDO_WEIGHT_SOURCE::String,
     PSEUDO_WEIGHT_EPS::Float64,
     THETASTD_SCALE_FIXED::Float64,
-    WRITE_ALT_NODEW_COL::Bool=false)
+    WRITE_ALT_NODEW_COL::Bool=false,
+    STD_MIN_PROBES::Int=128, STD_REL_TOL::Float64=0.10, STD_EXACT_MAX_NRED::Int=2048)
 
-    # Unique events in this group (MATLAB unique() => sorted ascending)
     ev_all = sort(unique(vcat(gi, gj)))
     nNodes = length(ev_all)
-
-    # Map global EventID -> local 1..nNodes
-    map = Dict{Int,Int}()
-    for (i,eid) in enumerate(ev_all)
-        map[eid] = i
-    end
-    li = [map[i] for i in gi]
-    lj = [map[j] for j in gj]
-
-    theta_local = fill(NaN, nNodes)
-    ref_local   = fill(NaN, nNodes)   # store GLOBAL ref EventID (float, printed with %.0f)
-    std_local   = fill(NaN, nNodes)
-    nodew_local = fill(NaN, nNodes)
-    deg_local   = zeros(Int, nNodes)
-
-    keep_mask = (w_base .> 0.0)
-    wrob_full = ones(Float64, length(gd))
-
-    valid_edges = findall(>(0.0), w_base)
-    if isempty(valid_edges)
-        # No usable edges: return all-NaN theta, keep_mask already false
-        pseudo_info = (used_pseudo=false, n_pseudo_comps=0)
-        return ev_all, theta_local, ref_local, std_local, deg_local, nodew_local, keep_mask, wrob_full, NaN, pseudo_info
-    end
-
-    comps = uf_components(nNodes, li[valid_edges], lj[valid_edges])
-    nComp = maximum(comps)
-
-    comp_sigma = fill(NaN, nComp)
-    comp_w     = zeros(Int, nComp)
-
-    used_pseudo_any = false
+    map = Dict(eid => i for (i,eid) in enumerate(ev_all))
+    li = [map[i] for i in gi]; lj = [map[j] for j in gj]
+    theta_local = fill(NaN, nNodes); ref_local = fill(NaN, nNodes)
+    std_local = fill(NaN, nNodes); nodew_local = fill(NaN, nNodes)
+    deg_local = zeros(Int, nNodes)
+    keep_mask = isfinite.(w_base) .& (w_base .> 0.0) .& isfinite.(gd)
+    wrob_full = zeros(Float64, length(gd))
+    diagnostics = NamedTuple[]
+    component_sigmas = Float64[]
     n_pseudo_comps = 0
 
-    for c in 1:nComp
+    # First pass: initial component gate, then residual-based pruning.
+    comps = uf_components(nNodes, li[keep_mask], lj[keep_mask])
+    for c in unique(comps)
+        nodes = findall(==(c), comps)
+        edges = findall(keep_mask .& (comps[li] .== c) .& (comps[lj] .== c))
+        if length(edges) < MIN_EDGES || length(edges) < length(nodes)
+            keep_mask[edges] .= false
+            continue
+        end
+        localmap = Dict(node => i for (i,node) in enumerate(nodes))
+        a = [localmap[li[e]] for e in edges]; b = [localmap[lj[e]] for e in edges]
+        degree = nodeDegrees(length(nodes), a, b)
+        pin = argmax(degree)
+        free = [i for i in eachindex(nodes) if i != pin]
+        theta = solvePinnedLS(length(nodes), a, b, gd[edges], w_base[edges], pin, free, RIDGE_EPS)
+        r = theta[a] .- theta[b] .- gd[edges]
+        scale = 1.4826 * mad1(r)
+        if scale == 0.0 || !isfinite(scale)
+            scale = max(ROBUST_MIN_SCALE, std(r))
+        end
+        keep_mask[edges] .= abs.(r) .<= K_SIGMA * max(scale, ROBUST_MIN_SCALE)
+    end
+
+    # References, fits and error estimates must describe the surviving graph.
+    comps = uf_components(nNodes, li[keep_mask], lj[keep_mask])
+    for c in unique(comps)
         nodes_c = findall(==(c), comps)
+        idx_e = findall(keep_mask .& (comps[li] .== c) .& (comps[lj] .== c))
         n_c = length(nodes_c)
-
-        # Edges within this component AND positive base weight
-        mE = BitVector(undef, length(gd))
-        @inbounds for k in eachindex(gd)
-            mE[k] = (w_base[k] > 0.0) && (comps[li[k]] == c) && (comps[lj[k]] == c)
-        end
-
-        if !any(mE)
-            # isolated nodes / no valid edges
-            @inbounds for idx in nodes_c
-                theta_local[idx] = 0.0
-                ref_local[idx] = Float64(ev_all[nodes_c[1]])
-                if EXPORT_THETA_STD
-                    std_local[idx] = 0.0
-                end
-            end
-            continue
-        end
-
-        idx_e = findall(mE)
-        nE = length(idx_e)
-        redundancy = nE - (n_c - 1)
-
-        # Microfamily gate: require enough edges and at least one cycle
-        if nE < MIN_EDGES || redundancy < 1
+        # Repeat the microfamily gate after pruning; isolated rows stay NaN.
+        if length(idx_e) < MIN_EDGES || length(idx_e) < n_c
             keep_mask[idx_e] .= false
-            wrob_full[idx_e] .= 0.0
             continue
         end
-
-        # Extract component edges
-        a_all = li[idx_e]
-        b_all = lj[idx_e]
-        dt_k  = gd[idx_e]
-        wb_k  = w_base[idx_e]
-
-        # Map component node indices -> 1..n_c
-        mapc = Dict{Int,Int}()
-        for (ii,node) in enumerate(nodes_c)
-            mapc[node] = ii
-        end
-        a = [mapc[x] for x in a_all]
-        b = [mapc[x] for x in b_all]
-
-        # Degree for pin selection (unweighted)
-        deg0 = zeros(Int, n_c)
-        @inbounds for k in eachindex(a)
-            deg0[a[k]] += 1
-            deg0[b[k]] += 1
-        end
-        pin = argmax(deg0)  # first max => stable tie-break
+        mapc = Dict(node => i for (i,node) in enumerate(nodes_c))
+        a = [mapc[li[e]] for e in idx_e]; b = [mapc[lj[e]] for e in idx_e]
+        dt_k = gd[idx_e]; wb_k = w_base[idx_e]
+        deg_kept = nodeDegrees(n_c, a, b)
+        pin = argmax(deg_kept) # highest surviving degree; ties use smallest event ID
         keep_idx = [i for i in 1:n_c if i != pin]
-
-        # LS (all edges)
-        theta_c = solvePinnedLS(n_c, a, b, dt_k, wb_k, pin, keep_idx, RIDGE_EPS)
-
-        # residuals
-        r = (theta_c[a] .- theta_c[b]) .- dt_k
-
-        # Prune by MAD
-        if length(r) >= MIN_EDGES
-            s0 = 1.4826 * mad1(r)
-            if s0 == 0.0 || !isfinite(s0)
-                s0 = max(ROBUST_MIN_SCALE, std(r))
-            end
-            s0 = max(s0, ROBUST_MIN_SCALE)
-            bad = abs.(r) .> (K_SIGMA * s0)
-        else
-            bad = falses(length(r))
-        end
-        keep_c = .!bad
-
-        # LS (pruned)
-        w_eff = wb_k .* Float64.(keep_c)
+        w_eff = copy(wb_k); wrob_c = ones(length(idx_e))
         theta_c = solvePinnedLS(n_c, a, b, dt_k, w_eff, pin, keep_idx, RIDGE_EPS)
-
-        # IRLS (Huber)
-        wrob_c = ones(Float64, length(dt_k))
-        if IRLS_ITERS > 0
-            Jprev = Inf
-            for it in 1:IRLS_ITERS
-                r = (theta_c[a] .- theta_c[b]) .- dt_k
-                ww = w_eff
-                pos = ww .> 0.0
-                if any(pos)
-                    medw = median(ww[pos])
-                    use = pos .& (ww .>= 0.5 * medw)
-                    if any(use)
-                        s = 1.4826 * mad1(r[use])
-                    else
-                        s = 1.4826 * mad1(r[pos])
-                    end
-                    if s == 0.0 || !isfinite(s)
-                        s = max(ROBUST_MIN_SCALE, std(r[pos]))
-                    end
-                else
-                    s = ROBUST_MIN_SCALE
-                end
-                s = max(s, ROBUST_MIN_SCALE)
-                rs = r ./ s
-
-                wrob_c = huberWeight(rs, C_HUBER)
-                w_eff  = wb_k .* Float64.(keep_c) .* wrob_c
-
-                J = sum(w_eff .* (r .^ 2))
-                if isfinite(Jprev) && (Jprev - J) <= IRLS_REL_TOL * max(Jprev, eps())
-                    break
-                end
-                Jprev = J
-
-                theta_c = solvePinnedLS(n_c, a, b, dt_k, w_eff, pin, keep_idx, RIDGE_EPS)
+        Jprev = Inf
+        for it in 1:IRLS_ITERS
+            r = theta_c[a] .- theta_c[b] .- dt_k
+            scale = max(residualScale(r, w_eff), ROBUST_MIN_SCALE)
+            wrob_c = huberWeight(r ./ scale, C_HUBER)
+            w_eff = wb_k .* wrob_c
+            # Always solve with the weights that will be exported/used for covariance.
+            theta_c = solvePinnedLS(n_c, a, b, dt_k, w_eff, pin, keep_idx, RIDGE_EPS)
+            r = theta_c[a] .- theta_c[b] .- dt_k
+            J = sum(w_eff .* r.^2)
+            if isfinite(Jprev) && abs(Jprev - J) <= IRLS_REL_TOL * max(Jprev, eps())
+                break
             end
+            Jprev = J
         end
+        r = theta_c[a] .- theta_c[b] .- dt_k
+        sigma_hat = residualScale(r, w_eff)
+        push!(component_sigmas, sigma_hat)
+        deg_local[nodes_c] .= deg_kept
 
-        # Final sigma_hat (robust scale, high-weight subset)
-        r = (theta_c[a] .- theta_c[b]) .- dt_k
-        ww = w_eff
-        pos = ww .> 0.0
-        if any(pos)
-            medw = median(ww[pos])
-            use = pos .& (ww .>= 0.5 * medw)
-            if any(use)
-                sigma_hat = 1.4826 * mad1(r[use])
-            else
-                sigma_hat = 1.4826 * mad1(r[pos])
-            end
-            if sigma_hat == 0.0 || !isfinite(sigma_hat)
-                sigma_hat = std(r[pos])
-            end
-            if !isfinite(sigma_hat) || sigma_hat < 0.0
-                sigma_hat = 0.0
-            end
-        else
-            sigma_hat = NaN
-        end
-        comp_sigma[c] = sigma_hat
-
-        kept = w_eff .> 0.0
-        comp_w[c] = count(identity, kept)
-
-        # Degree on kept graph (unweighted)
-        deg_kept = zeros(Int, n_c)
-        @inbounds for k in eachindex(a)
-            if kept[k]
-                deg_kept[a[k]] += 1
-                deg_kept[b[k]] += 1
-            end
-        end
-        # Write degree back to local arrays (global node indices)
-        @inbounds for (ii,node) in enumerate(nodes_c)
-            deg_local[node] = deg_kept[ii]
-        end
-
-        # Node weights for pseudo_weight and/or alt output column
-        need_nodew = (THETASTD_MODE == "pseudo_weight") ||
-                     ((THETASTD_MODE == "hutch") && (THETASTD_FALLBACK == "pseudo_weight")) ||
-                     WRITE_ALT_NODEW_COL
         nodew_c = fill(NaN, n_c)
-        if need_nodew
-            kept_for_nodew = kept
-            if any(kept_for_nodew)
-                ww_src = similar(w_eff)
-                if PSEUDO_WEIGHT_SOURCE == "base"
-                    ww_src .= wb_k
-                elseif PSEUDO_WEIGHT_SOURCE == "robust"
-                    ww_src .= wrob_c
-                else
-                    ww_src .= w_eff
-                end
-                sumw = zeros(Float64, n_c)
-                cntw = zeros(Int, n_c)
-                @inbounds for k in eachindex(a)
-                    if kept_for_nodew[k]
-                        wv = ww_src[k]
-                        ai = a[k]; bi = b[k]
-                        sumw[ai] += wv; sumw[bi] += wv
-                        cntw[ai] += 1;  cntw[bi] += 1
-                    end
-                end
-                @inbounds for i in 1:n_c
-                    nodew_c[i] = sumw[i] / max(cntw[i], 1)
-                end
-                @inbounds for (ii,node) in enumerate(nodes_c)
-                    nodew_local[node] = nodew_c[ii]
-                end
+        if THETASTD_MODE == "pseudo_weight" || THETASTD_FALLBACK == "pseudo_weight" || WRITE_ALT_NODEW_COL
+            src = PSEUDO_WEIGHT_SOURCE == "base" ? wb_k : PSEUDO_WEIGHT_SOURCE == "robust" ? wrob_c : w_eff
+            sums = zeros(n_c)
+            for k in eachindex(a)
+                sums[a[k]] += src[k]; sums[b[k]] += src[k]
             end
+            nodew_c = sums ./ deg_kept
+            nodew_local[nodes_c] .= nodew_c
         end
 
-        # Theta std
         std_c = fill(NaN, n_c)
-        std_c[pin] = 0.0
-
-        run_hutch = EXPORT_THETA_STD &&
-                    (THETASTD_MODE == "hutch") &&
-                    (STD_PROBES > 0) &&
-                    (length(keep_idx) <= STD_MAX_NRED)
-
+        method = EXPORT_THETA_STD ? THETASTD_MODE : "disabled"
+        info = (reason="requested", probes=0, max_rel_se=NaN)
         if EXPORT_THETA_STD
-            if run_hutch
-                std_c = estimateThetaStdHutch(n_c, a, b, w_eff, pin, keep_idx, RIDGE_EPS,
-                    sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_PROBES, STD_PROBE_DIST, STD_BATCH, STD_REPORT_EVERY, STD_MIN_DIAGREL)
-            else
-                use_mode = THETASTD_MODE
-                if use_mode == "hutch"
-                    use_mode = THETASTD_FALLBACK
-                end
-                if use_mode == "pseudo_degree"
-                    degv = max.(Float64.(deg_kept), 1.0)
-                    sigma_std = sigmaForThetaStd(sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA)
-                    std_c = (sigma_std ./ sqrt.(degv))
-                    std_c[pin] = 0.0
-                    used_pseudo_any = true
-                    n_pseudo_comps += 1
-                elseif use_mode == "pseudo_weight"
-                    wnode = max.(nodew_c, PSEUDO_WEIGHT_EPS)
-                    std_c = 1.0 ./ (wnode .* THETASTD_SCALE_FIXED)
-                    std_c[pin] = 0.0
-                    used_pseudo_any = true
-                    n_pseudo_comps += 1
-                elseif use_mode == "none"
-                    std_c .= NaN
-                    std_c[pin] = 0.0
+            if method == "hutch"
+                if STD_PROBES <= 0 || length(keep_idx) > STD_MAX_NRED
+                    info = (reason=STD_PROBES <= 0 ? "disabled_probes" : "size_limit", probes=0, max_rel_se=NaN)
                 else
-                    std_c .= NaN
-                    std_c[pin] = 0.0
+                    std_c, info = estimateThetaStdHutch(n_c, a, b, w_eff, pin, keep_idx, RIDGE_EPS,
+                        sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_PROBES, STD_PROBE_DIST,
+                        STD_BATCH, STD_REPORT_EVERY, STD_MIN_DIAGREL;
+                        min_probes=STD_MIN_PROBES, rel_tol=STD_REL_TOL)
+                end
+                if info.reason != "converged"
+                    method = THETASTD_FALLBACK
                 end
             end
-        end
-
-        # Assign theta/ref/std to global local arrays for nodes in this component
-        ref_global = Float64(ev_all[nodes_c[pin]])
-        @inbounds for (ii,node) in enumerate(nodes_c)
-            theta_local[node] = theta_c[ii]
-            ref_local[node]   = ref_global
-            if EXPORT_THETA_STD
-                std_local[node] = std_c[ii]
+            if method == "exact"
+                if length(keep_idx) <= STD_EXACT_MAX_NRED
+                    std_c, exact_ok = estimateThetaStdExact(n_c, a, b, w_eff, pin, keep_idx, RIDGE_EPS,
+                        sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_BATCH)
+                    if !exact_ok
+                        method = "graph_bound"
+                        info = merge(info, (reason=info.reason * "+exact_failed",))
+                    end
+                else
+                    method = "graph_bound"
+                    info = merge(info, (reason=info.reason * "+exact_size_limit",))
+                end
+            elseif method == "pseudo_degree"
+                std_c = sigmaForThetaStd(sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA) ./ sqrt.(deg_kept)
+                n_pseudo_comps += 1
+            elseif method == "pseudo_weight"
+                std_c = 1.0 ./ (max.(nodew_c, PSEUDO_WEIGHT_EPS) .* THETASTD_SCALE_FIXED)
+                n_pseudo_comps += 1
             end
-        end
-
-        # Update per-edge keep + wrob in original edge order
-        keep_mask[idx_e] .= keep_c
-        @inbounds for (kk, eidx) in enumerate(idx_e)
-            if keep_c[kk]
-                wrob_full[eidx] = wrob_c[kk]
-            else
-                wrob_full[eidx] = 0.0
+            # Retired NaN fallbacks now use a finite bound: GraphSplit may
+            # interpret missing std as its minimum sigma, creating false precision.
+            if THETASTD_MODE == "hutch" && method in ("nan", "none")
+                method = "graph_bound"
+                info = merge(info, (reason=info.reason * "+legacy_nan_fallback",))
             end
+            if method == "graph_bound"
+                std_c = estimateThetaStdGraphBound(n_c, a, b, w_eff, pin,
+                    sigmaForThetaStd(sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA))
+            elseif method == "none"
+                std_c .= NaN
+            end
+            std_c[pin] = 0.0 # a gauge constraint, not an observation of zero noise
         end
+        ref = ev_all[nodes_c[pin]]
+        push!(diagnostics, (ref=ref, nodes=n_c, method=method, reason=info.reason,
+                            probes=info.probes, max_rel_se=info.max_rel_se))
+        theta_local[nodes_c] .= theta_c
+        ref_local[nodes_c] .= Float64(ref)
+        std_local[nodes_c] .= std_c
+        wrob_full[idx_e] .= wrob_c
     end
-
-    # Representative sigma_hat per group (reporting only): median over comps with kept edges
-    good = [(comp_w[c] > 0) && isfinite(comp_sigma[c]) for c in 1:nComp]
-    sigma_hat_global = NaN
-    if any(good)
-        sigma_hat_global = median(comp_sigma[good])
-    end
-
-    pseudo_info = (used_pseudo=used_pseudo_any, n_pseudo_comps=n_pseudo_comps)
-
+    finite_sigmas = filter(isfinite, component_sigmas)
+    sigma_hat_global = isempty(finite_sigmas) ? NaN : median(finite_sigmas)
+    pseudo_info = (used_pseudo=n_pseudo_comps > 0, n_pseudo_comps=n_pseudo_comps, components=diagnostics)
     return ev_all, theta_local, ref_local, std_local, deg_local, nodew_local,
            keep_mask, wrob_full, sigma_hat_global, pseudo_info
+end
+
+function nodeDegrees(n, a, b)
+    degree = zeros(Int, n)
+    for k in eachindex(a)
+        degree[a[k]] += 1; degree[b[k]] += 1
+    end
+    return degree
+end
+
+function residualScale(r, w)
+    pos = isfinite.(w) .& (w .> 0)
+    any(pos) || return NaN
+    use = pos .& (w .>= 0.5 * median(w[pos]))
+    s = 1.4826 * mad1(r[use])
+    if !isfinite(s) || s == 0.0
+        s = std(r[pos])
+    end
+    return (isfinite(s) && s >= 0.0) ? s : NaN
 end
 
 function solvePinnedLS(n_c::Int, a::Vector{Int}, b::Vector{Int},
@@ -1390,78 +1271,11 @@ end
 speye(n::Int) = spdiagm(0 => ones(Float64, n))
 
 function sigmaForThetaStd(sigma_hat::Float64, minSigma::Float64, applyMinSigma::Bool)
-    sigma_std = (isfinite(sigma_hat) && sigma_hat >= 0.0) ? sigma_hat : 0.0
+    sigma_std = (isfinite(sigma_hat) && sigma_hat >= 0.0) ? sigma_hat : NaN
     if applyMinSigma && isfinite(minSigma) && minSigma > 0.0
         sigma_std = max(sigma_std, minSigma)
     end
     return sigma_std
-end
-
-function estimateThetaStdHutch(n_c::Int, a::Vector{Int}, b::Vector{Int}, w_eff::Vector{Float64},
-    pin::Int, keep_idx::Vector{Int}, RIDGE_EPS::Float64,
-    sigma_hat::Float64, minSigma::Float64, applyMinSigma::Bool, K::Int, dist::String, batch::Int, reportEvery::Int, minDiagRel::Float64)
-
-    valid = w_eff .> 0.0
-    aa = a[valid]; bb = b[valid]; ww = w_eff[valid]
-
-    Wadj = sparse(vcat(aa, bb), vcat(bb, aa), vcat(ww, ww), n_c, n_c)
-    dsum = vec(sum(Wadj, dims=2))
-    L = spdiagm(0 => dsum) - Wadj
-
-    nred = length(keep_idx)
-    Lred = L[keep_idx, keep_idx] + (RIDGE_EPS * speye(nred))
-
-    # Factorization
-    F = nothing
-    use_chol = true
-    try
-        F = cholesky(Symmetric(Lred))
-    catch
-        use_chol = false
-        F = lu(Lred)
-    end
-
-    diag_est = zeros(Float64, nred)
-    nDone = 0
-
-    nBatches = Int(ceil(K / batch))
-    for bi in 1:nBatches
-        thisK = min(batch, K - nDone)
-        thisK <= 0 && break
-
-        Z = zeros(Float64, nred, thisK)
-        if dist == "rademacher"
-            Z .= sign.(randn(nred, thisK))
-            Z[Z .== 0.0] .= 1.0
-        elseif dist == "gaussian"
-            Z .= randn(nred, thisK)
-        else
-            error("STD_PROBE_DIST must be rademacher or gaussian")
-        end
-
-        X = F \ Z
-        diag_est .+= vec(sum(X .* Z, dims=2))
-
-        nDone += thisK
-        if reportEvery > 0 && (bi % reportEvery == 0)
-            tmp = diag_est ./ max(nDone, 1)
-            @printf("    Hutch diag: %d/%d probes (median diag ~ %.3e)\n", nDone, K, median(abs.(tmp)))
-        end
-    end
-
-    diag_est ./= max(nDone, 1)
-
-    medDiag = median(abs.(diag_est))
-    floorDiag = max(medDiag * minDiagRel, 0.0)
-    diag_est = max.(diag_est, floorDiag)
-
-    sigma_std = sigmaForThetaStd(sigma_hat, minSigma, applyMinSigma)
-    std_red = sigma_std .* sqrt.(max.(diag_est, 0.0))
-
-    std_c = fill(NaN, n_c)
-    std_c[pin] = 0.0
-    std_c[keep_idx] .= std_red
-    return std_c
 end
 
 end # module

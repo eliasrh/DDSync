@@ -1,15 +1,33 @@
-# DDSync (MATLAB + Julia)
+# DDSync (Julia and MATLAB)
 
 DDSync is a graph-based denoising and synchronization tool for differential travel-time pair files. It reads a HypoDD/GrowClust-style `dt.cc` file, solves each station-phase group independently, and writes synchronized differential times plus per-event `theta` and optional `std_theta` metadata.
 
 The repository contains two implementations:
 
-- `DDSync/` - MATLAB package implementation.
-- `DDSyncJulia/` - Julia implementation with TOML configuration and no non-stdlib package dependencies.
+- **`DDSyncJulia/` — primary implementation**, with TOML configuration and only Julia standard-library dependencies.
+- `DDSync/` — MATLAB implementation, maintained for bug fixes.
 
 The synchronization algorithm and its defaults are shared. Input-ID handling
 differs: Julia now maps arbitrary integer IDs automatically, while MATLAB
 still requires users to prepare compact positive IDs before running.
+
+## Update (18 October 2026): references after pruning and reliable uncertainty export
+
+Both Julia and MATLAB now rebuild components after pruning, choose a reference within each surviving component, and refit independently. Negative or unconverged stochastic variance estimates trigger fallback instead of being clipped into false precision. The default is an adaptive **maximum of 2048 probes**, with checked exact fallback for small components and a finite conservative graph bound if exact calculation cannot be used.
+
+Read the [update and validation report](docs/updates/2026-10-18-pruning-uncertainty.md) and the [probe-budget and uncertainty guide](docs/uncertainty.md). Rerun affected datasets; never connect theta stars across different reference IDs.
+
+## Try the bundled example in Julia
+
+From the repository root, with Julia 1.10 or later installed:
+
+```bash
+mkdir example-run
+cd example-run
+julia ../DDSyncJulia/run_ddsync.jl ../DDSync/dt.cc ../DDSync/catalog.txt
+```
+
+Outputs are written into `example-run/`. The example input is already synchronized, so large changes are not expected. For your own data and configuration, start with the [Julia manual](DDSyncJulia/README.md). Relative paths are resolved from the working directory; use separate output directories for separate runs.
 
 ## Recent update (28 September 2026): automatic event-ID mapping in Julia
 
@@ -24,7 +42,7 @@ in the `theta` and `std_theta` files. Use **`catalog_seq.txt` with those theta
 directories in GraphSplit**. No new TOML setting is required. Inputs already
 using `1:N` retain their IDs and do not need the extra files.
 
-The MATLAB implementation is unchanged. Its IDs must still be reindexed
+The September indexing change did not alter MATLAB input-ID handling. Its IDs must still be reindexed
 before processing; automatic mapping is available only in Julia. The
 [Julia manual](DDSyncJulia/README.md#event-ids-and-graphsplit) explains file
 selection, custom output paths, and how to retain the original correspondence.
@@ -48,12 +66,13 @@ For a kept observation between events `i` and `j`, the synchronized differential
 
 | Situation | Suggested implementation |
 | --- | --- |
-| You already work in MATLAB or want the original reference package | `DDSync/` |
+| You are starting a new workflow | `DDSyncJulia/` |
+| You already work in MATLAB and need the supported bug fixes | `DDSync/` |
 | You want a command-line workflow with TOML configuration | `DDSyncJulia/` |
 | You want lower memory use during pass 2 on large catalogs | `DDSyncJulia/` with `runtime.store_dense_group_arrays = false` |
-| You want to run the bundled Spanish Springs example immediately | `DDSync/` |
+| You want to try the bundled Spanish Springs example | Either implementation; Julia command above |
 
-The Julia folder does not include example `dt.cc` and `catalog.txt` files, but it reads the same file formats as MATLAB.
+Both implementations read the example data in `DDSync/`; there is no need to duplicate the input files.
 
 ---
 
@@ -103,13 +122,13 @@ The MATLAB folder includes example `dt.cc` and `catalog.txt` from the Spanish Sp
 
 ---
 
-## Lastest Update: Shared `min_scale` versus `min_sigma` behavior
+## Shared `min_scale` versus `min_sigma` behavior
 
 DDSync has two separate small-scale safeguards. They are deliberately separate.
 
 `robust.min_scale` is used during robust pruning and Huber IRLS. It prevents divide-by-zero behavior when residuals are exactly zero or nearly zero. It can affect which edges are pruned and how robust weights are computed.
 
-`std.min_sigma` is used only when exporting `std_theta`, and only when `std.apply_min_sigma = true`. It floors the final residual-noise scale before Hutchinson or `pseudo_degree` standard deviations are written.
+`std.min_sigma` is used only when exporting `std_theta`, and only when `std.apply_min_sigma = true`. It floors the final residual-noise scale before Hutchinson, exact or `pseudo_degree` standard deviations are written.
 
 Disabling `std.apply_min_sigma` disables the exported `std_theta` residual-noise floor. It does not disable the robust pruning/IRLS floor.
 
@@ -119,7 +138,7 @@ Disabling `std.apply_min_sigma` disables the exported `std_theta` residual-noise
 
 ---
 
-## Lastest update: Shared precision behavior
+## Shared precision behavior
 
 Both implementations expose formatting precision for the `theta` and `std_theta` value columns. The default is 9 digits after the decimal point.
 
@@ -140,7 +159,19 @@ thetastd_decimals = 9
 
 These settings matter when differential times can be microseconds or smaller. The older fixed `%.6f` output has only 6 digits after the decimal point. With seconds as the unit, 6 decimals is 1 microsecond, 9 decimals is 1 nanosecond, and 12 decimals is 1 picosecond. Set these fields to `12` or higher for sub-microsecond applications, or set them to `6` to reproduce older formatting.
 
-The synchronized `dt` column in `dt_sync.cc` has a separate precision setting: `cfg.output.dt_decimals` in MATLAB and `dt_decimals` in Julia/TOML.
+Extra printed digits do not increase numerical accuracy: temporary observations and pass-2 theta/std storage use single precision. The synchronized `dt` column in `dt_sync.cc` has a separate precision setting: `cfg.output.dt_decimals` in MATLAB and `dt_decimals` in Julia/TOML.
+
+---
+
+## Tests
+
+From the repository root:
+
+```bash
+julia --startup-file=no DDSyncJulia/test/runtests.jl
+```
+
+In MATLAB: `addpath('DDSync/test'); run_tests`. Both suites use shared synthetic data and check pruning, references, uncertainty failure handling and export weights. Julia also tests arbitrary event-ID mapping. The [validation report](docs/updates/2026-10-18-pruning-uncertainty.md) gives the separate probe-study commands and results.
 
 ---
 
