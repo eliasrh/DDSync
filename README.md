@@ -177,13 +177,11 @@ In MATLAB: `addpath('DDSync/test'); run_tests`. Both suites use shared synthetic
 
 ## References
 
-- Elías Rafn Heimisson (2026). GraphSplit: Sparse Double-Difference Earthquake
-  Relocation From Synchronized Differential-Time Graphs.
-  [doi:10.1029/2026JB035934](https://doi.org/10.1029/2026JB035934).
-  Submitted to *Journal of Geophysical Research: Solid Earth*; preprint in
-  moderation. The DOI may not yet resolve.
+- Elías Rafn Heimisson. GraphSplit: Sparse Double-Difference Earthquake Relocation From Synchronized Differential-Time Graphs. ESS Open Archive. 02 October 2026. [doi:10.22541/essoar.15009811/v1](https://doi.org/10.22541/essoar.15009811/v1).
+Submitted to *Journal of Geophysical Research: Solid Earth*
 
-- Elías Rafn Heimisson, Yifan Yu; *DDSync: Graph‐Based Denoising of Differential Travel‐Time Observations with Applications to Pick Reconstruction and Path‐Difference Tomography.* **Seismological Research Letters** 2026; doi: https://doi.org/10.1785/0220260086 
+- Elías Rafn Heimisson, Yifan Yu; *DDSync: Graph‐Based Denoising of Differential Travel‐Time Observations with Applications to Pick Reconstruction and Path‐Difference Tomography.* **Seismological Research Letters** 2026; doi: https://doi.org/10.1785/0220260086
+  
 - Trugman, D. T., & Shearer, P. M. (2017). *GrowClust: A hierarchical clustering algorithm for relative earthquake relocation, with application to the Spanish Springs and Sheldon, Nevada, earthquake sequences.* **Seismological Research Letters**, 88(2A), 379-391.
 
 ---
