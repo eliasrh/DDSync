@@ -1,137 +1,130 @@
 # References, uncertainties and probe budgets
 
-DDSync solves each station and phase independently. Its theta values are relative to a reference event, and its statistical uncertainty model is conditional on the retained observations and final robust weights. Check both the reference IDs and the uncertainty diagnostics before using the exports.
+DDSync fits each station-phase component independently. Theta is relative to a reference event; uncertainty is conditional on the retained observations, final robust weights and residual-noise model. The default now uses exact calculation for small components and makes uncertainty decisions **per event** for larger ones. A few unstable Hutchinson estimates no longer replace a whole component with a graph bound.
 
 ## References after pruning
 
-Pruning can split an initially connected group. DDSync rebuilds the surviving graph, reapplies the minimum-edge and cycle-redundancy gates, then fits each accepted component independently. The event with the highest surviving degree is pinned to zero; ties use the smallest event ID. In Julia these are the internal sequential IDs when mapping was needed.
+DDSync rebuilds the graph after pruning and reapplies the minimum-edge and cycle-redundancy gates. Each accepted component gets its own highest-degree reference, with smallest event ID breaking ties. In Julia, mapped datasets use internal sequential IDs here.
 
-Each theta/std row records its own component's reference. A reference star must contain only nodes with that reference. Subtract theta values only within the same station-phase file and finite reference ID. Offsets between separate components are unconstrained. An event that loses all usable observations, or belongs to a rejected fragment, has `NaN` theta, reference and uncertainty and degree zero.
+Subtract theta values only within the same station-phase file and reference ID. Offsets between separate components are unconstrained. Isolated events and rejected fragments have missing theta/reference/std and degree zero. Each accepted reference has theta and std zero because it fixes the gauge; its physical arrival time is not known exactly.
 
-The reference's theta and uncertainty are zero because of the gauge constraint. This does not mean that its physical arrival time is known exactly. For channel-to-channel differential moveout, both the target and chosen anchor must be in the same surviving component at every channel used. Merely finding both IDs in a file is insufficient.
+## What is being estimated
 
-## What the uncertainty calculation estimates
-
-For each accepted component, DDSync forms the weighted graph Laplacian `L`, removes the reference row/column, and adds the configured numerical ridge. Write the resulting matrix as `Lred`. The model standard deviations are
+Let `Lred` be the weighted graph Laplacian after removing the reference row and column and adding the numerical ridge. The conditional model is
 
 ```text
 std_theta = sigma_std * sqrt(diag(inv(Lred)))
 ```
 
-Here `sigma_std` is that component's final residual-noise scale, optionally floored by `min_sigma`. Exact mode computes this diagonal through batched unit-vector solves. Hutchinson mode estimates it with random vectors `z` and solves `Lred*x = z`, averaging the samples `x .* z`.
+`sigma_std` is the component's final residual-noise scale, optionally floored by `min_sigma`. Exact calculation removes Monte Carlo sampling error from the inverse-diagonal calculation. It does not remove floating-point error, ridge bias, uncertainty in the noise scale, pruning effects or physical model error. Correlation coefficients used as relative weights are not necessarily calibrated inverse observation variances.
 
-“Exact” refers to removing Monte Carlo sampling error from this matrix calculation; it does not remove floating-point error, noise-scale uncertainty, selection effects from pruning, model error, or bias from the ridge. Correlation coefficients used as relative weights are not necessarily calibrated inverse observation variances. These exports are not a complete uncertainty budget for a relocated hypocenter or an absolute pick.
+Hutchinson uses random vectors `z`, solves `Lred*x = z`, and averages `x .* z`. Individual samples and finite-sample averages can be negative even though the true inverse diagonal is positive. Negative estimates are never replaced with a tiny positive variance.
 
-Individual Hutchinson samples can be negative even for a valid positive-definite matrix. The averaged diagonal must be finite, strictly positive and sufficiently stable before DDSync accepts it. A negative average is not a small variance.
+## Default decision sequence
 
-## Defaults and choosing a probe budget
+1. **Small component:** `mode="auto"` computes the exact diagonal directly when there are at most `exact_max_nred=2048` unpinned events. It spends no random probes first.
+2. **Larger component:** sample up to `probes=2048`, checking after batches of 128 and at least `min_probes=128` samples. Sampling stops early if every entry passes. At the end, preserve every entry whose estimated Monte Carlo standard error divided by its estimated diagonal is at most `rel_tol=0.10`.
+3. **Selected exact repair:** solve for up to `repair_max_nodes=128` failed entries, prioritizing invalid estimates, then the largest relative sampling errors. Reuse the factorization already used by Hutchinson. This limit counts extra right-hand sides, independently of component size.
+4. **Remaining positive estimates:** with `unconverged="keep"`, retain entries with sufficient samples and finite positive estimates whose relative MC standard error is below 1. They are labeled `hutch_unconverged`, **not converged**. The cutoff excludes near-zero estimates whose standard error is as large as the estimate; it is not a confidence guarantee. Use `unconverged="fallback"` to send all unrepaired failing entries to fallback instead.
+5. **Remaining unusable entries:** use `fallback="pseudo_degree"`, a finite practical proxy `sigma_std / sqrt(degree)`. This also applies when sampling is disabled, exceeds `max_nred=40000`, or cannot obtain usable solves. Successful entries elsewhere in the component are preserved.
 
-The default maximum is now **2048 probes**, replacing 100000. DDSync checks convergence after each batch of 128, starting at 128 samples. For every unpinned node it estimates the Monte Carlo standard error of the mean diagonal and requires
+The 10% diagnostic applies to the **variance diagonal**. In the small-error regime it corresponds to about 5% relative standard error of std. Neither this diagnostic nor the 100% cutoff for retained noisy entries is a guaranteed error bound or simultaneous confidence interval. A positive estimate can still be inaccurate. Inspect the per-event method labels and do not treat mixed output as uniformly converged.
 
-```text
-standard_error_of_mean / estimated_diagonal <= 0.10
-```
+A selected exact repair solves `Lred*x = e_i` and takes `x[i]`. This uses the **full component**; it is not an inverse of a local neighborhood. A neighborhood calculation would condition away external connections and can miss uncertainty caused by a weak bridge. Extra work is bounded by the number of selected solves and the batch size, although sparse-factorization memory still depends on graph structure.
 
-All nodes must pass. The default is roughly a 5% one-standard-error diagnostic for the square-root conversion to std, when errors are small. It is **not** a guarantee that every exported std is within 5% or 10% of the exact value, and is not a simultaneous confidence interval. Checking only a median would hide unstable nodes.
+Linear solves are checked using componentwise relative backward error, `abs(Lred*x-b) / (abs(Lred)*abs(x)+abs(b))`, with tolerance `1e-12` and protection against underflow in the residual denominator. This is the [LAPACK backward-error definition](https://www.netlib.org/lapack/explore-html/d0/df7/dla__lin__berr_8f_source.html). It avoids rejecting an accurate solve just because large terms cancel. A small backward error does not guarantee small forward error in an ill-conditioned system.
 
-Use the following workflow:
+## Fallback choices and their limits
 
-1. Start with the defaults. Inspect every `# std_component` line in `sync_metrics.txt` and the actual method used.
-2. A budget of 128 is reasonable for an exploratory run only if the checks pass or the reported fallback is acceptable. Setting a smaller budget than `min_probes` always forces fallback. Do not reduce `min_probes` or loosen `rel_tol` simply to label an unstable result as converged.
-3. If a larger component reaches its budget with `not_converged` or `nonpositive_estimate`, try 8192 or more probes. For stable sampling behavior, halving Monte Carlo error usually costs about four times as many probes. Graph structure, reference choice and weak connections matter as well as event count.
-4. For final analyses, compare representative components at a larger budget or independent random seed. On components within the exact size limit, use `mode="exact"` to remove sampling noise entirely. Assess the accuracy needed by the downstream application.
-5. If the reason is `solve_failed` or `invalid_noise_scale`, increasing the probe count does not repair the numerical problem. Inspect input values, weights, weak connections and scale settings. Raising the ridge can bias both theta and uncertainty and should not be a routine way to hide failure.
+**Degree fallback is a weighting proxy, not a calibrated uncertainty.** It ignores weak connections, edge-weight magnitudes and reference geometry. It can substantially underestimate uncertainty, especially for an event across a weak bridge or a high-degree hub far from the reference. Keeping checked Hutch values and attempting selected exact corrections first reduces the use of this approximation. If many rows require a proxy, increase the probe/repair budget or use exact calculation where feasible before relying on statistical weights.
 
-A study shipped with this update uses ten random seeds per graph and language. A 100-node graph with a strong hub passed at 128 probes in all runs. A 20-node dense graph generally needed about 640. Dense and ring graphs with 100 nodes needed roughly 4000–5200, and a weakly linked graph sometimes failed even at 8192. These are illustrative synthetic cases, not universal thresholds. See the [update report](updates/2026-10-18-pruning-uncertainty.md) for results and reproduction commands.
+`pseudo_weight` is another explicit practical-weight proxy based on incident edge weights. It is also not calibrated. `fallback="exact"` repairs all failing entries if the whole component fits within `exact_max_nred`; beyond that cap it uses the normal selected-repair budget and degree fallback for entries that remain unusable. If sampling was skipped, exact fallback is attempted only within the full exact size cap. A failed exact calculation also ends in degree fallback unless a different fallback was explicitly selected.
 
-## Fallback that preserves GraphSplit constraints
-
-The default `fallback="exact"` applies when Hutchinson is disabled (`probes=0`), exceeds `max_nred`, fails a solve, or exhausts its budget without a usable estimate. This includes nonpositive or nonfinite final estimates. Negative samples or intermediate negative averages can recover with more probes; the decision is made when the diagnostic passes or the budget is exhausted.
-
-Exact calculation is limited to **2048 unpinned nodes** (`exact_max_nred`). If the component is larger or the exact solve fails, DDSync uses **`graph_bound`**, a finite conservative bound. It builds a breadth-first spanning tree of the retained weighted component, rooted at its reference, and computes
+`graph_bound` remains available **only when explicitly requested** as a mode or fallback. It builds a breadth-first spanning tree and uses
 
 ```text
 bound_variance(i) = sigma_std^2 * sum(1 / edge_weight along tree path from reference to i)
 ```
 
-The sum is a path resistance. Deleting other edges cannot decrease effective resistance, so the tree value bounds the pinned inverse-Laplacian diagonal from above; a nonnegative ridge only lowers that diagonal further. This follows from [Rayleigh monotonicity for weighted graph Laplacians](https://www.control.utoronto.ca/~jwsimpson/papers/2017k/). The bound is conditional on the same noise scale and weighting model as the exact calculation, not a bound on all physical sources of error. It can be loose, especially on dense graphs, and depends on the selected spanning tree. Its cost is linear in nodes plus edges and it requires no factorization or probes.
+This upper-bounds the pinned inverse-Laplacian diagonal by [Rayleigh monotonicity](https://www.control.utoronto.ca/~jwsimpson/papers/2017k/); a nonnegative ridge only decreases the diagonal. However, discarding alternative paths can make the bound much larger than the actual uncertainty. On a uniformly weighted complete graph with `n` events, its std is approximately `sqrt(n/2)` times exact. It is unsuitable as a general default for practical weighting.
 
-**Estimator failure does not introduce NaN uncertainty or zero-weight reference constraints for otherwise accepted theta components.** Each non-reference event receives a finite positive bound, and the reference retains its gauge zero. This is necessary for GraphSplit compatibility: its theta reader can replace missing uncertainties with its minimum sigma, which would turn missing information back into apparent confidence. Isolated events and components rejected by the observation gates still have `NaN` theta/reference/std and are not usable constraints in the first place.
+DDSync's exported `thetaStd` weight scales as `1/std` before its cap. A downstream least-squares program using inverse-variance weights scales as `1/std^2`: a 20-fold std inflation means 20-fold and 400-fold weight reductions respectively. Caps and minimum-sigma filters can further change these ratios.
 
-The finite bound is explicitly identified as `method=graph_bound`. Use `fallback="graph_bound"` to skip exact fallback, or `mode="graph_bound"` to request the bound directly. `fallback="nan"` and `fallback="none"` are retained as legacy aliases but now select the finite bound after a Hutchinson failure. A disconnected numerical component, invalid noise scale, or numeric overflow that prevents even a finite bound stops the run with an explanation rather than publishing a usable theta with missing uncertainty. A graph-bound fallback needs a positive finite noise scale; for exactly consistent synthetic data, keep `apply_min_sigma=true` and a positive `min_sigma`.
+Legacy `fallback="nan"` and `"none"` now use degree fallback. `min_diag_rel` / MATLAB `min_diagrel` remains accepted but ignored. No automatic path selects a graph bound. Explicit `mode="graph_bound"` bypasses sampling; an explicit graph-bound fallback affects only entries still needing fallback after repair and the configured retention policy. To reproduce whole-component bounds, use the explicit mode.
 
-`pseudo_degree` and `pseudo_weight` remain explicit choices for fast practical weighting, including as fallbacks. They are **not calibrated uncertainties or conservative bounds**, especially across weakly connected graphs. They are not the default failure response.
+## Configuration
 
-Fallback applies to the whole component so the output does not mix stochastic and proxy meanings within a reference star. The former `min_diag_rel` / MATLAB `min_diagrel` setting is accepted but ignored. No negative variance is replaced by a tiny positive floor.
-
-Explicit `mode="none"` or `export=false` still allows a theta-only workflow. Do not use those settings when the downstream workflow requires supplied uncertainty. Unknown values in this deliberately disabled mode are excluded from median scaling; `thetaStd` output weights are zero, so choose a different output weight mode.
-
-## Configuration examples
-
-Julia TOML, using the new defaults explicitly:
+Julia TOML:
 
 ```toml
 [std]
-mode = "hutch"
+mode = "auto"
+exact_max_nred = 2048
 probes = 2048
 min_probes = 128
 batch = 128
 rel_tol = 0.10
-fallback = "exact"
-exact_max_nred = 2048
+repair_max_nodes = 128
+unconverged = "keep"
+fallback = "pseudo_degree"
 ```
 
-MATLAB equivalents:
+MATLAB:
 
 ```matlab
 cfg = ddsync.config_default();
-cfg.std.mode = 'hutch';
+cfg.std.mode = 'auto';
+cfg.std.exact_max_nred = 2048;
 cfg.std.hutch.probes = 2048;
 cfg.std.hutch.min_probes = 128;
 cfg.std.hutch.batch = 128;
 cfg.std.hutch.rel_tol = 0.10;
-cfg.std.fallback = 'exact';
-cfg.std.exact_max_nred = 2048;
+cfg.std.repair_max_nodes = 128;
+cfg.std.unconverged = 'keep';
+cfg.std.fallback = 'pseudo_degree';
 ```
 
-For deterministic uncertainty on small components, set `mode="exact"` / `cfg.std.mode='exact'`. The exact size limit still applies. For a larger stochastic budget change `probes` to 8192; early stopping still applies. Batch size controls memory use and the spacing of convergence checks.
+Use `mode="hutch"` to request sampling even on a small component, `mode="exact"` for deterministic calculation up to the full exact size cap, or `mode="auto"` for the default selection. Explicit exact mode above the cap uses fallback; increase the cap if that calculation is intended and its cost is acceptable. `repair_max_nodes=0` disables selected repairs. A probe budget below `min_probes` can still be repaired exactly; it cannot produce accepted or retained stochastic values.
 
-For reproducible investigations, set Julia's RNG with `using Random; Random.seed!(1234)` before calling `DDSync.run(cfg)`, or MATLAB's with `rng(1234)` before `ddsync.run(cfg)`. Julia and MATLAB use different random streams; equal seeds do not imply equal probe vectors. The exact method is the appropriate basis for cross-language numerical comparisons.
+Existing configurations retain explicit settings. To adopt the new selection and fallback, change `mode` to `auto` and `fallback` to `pseudo_degree`; new repair/retention fields are supplied by defaults. Explicit `fallback="graph_bound"` remains graph-bound fallback. Existing files with `mode="hutch"` still sample small components. Explicit old large probe budgets remain in effect.
 
-Existing configuration files that explicitly set `probes=100000` or `fallback="pseudo_degree"` retain those choices. Copying an updated template is not required; edit only the relevant fields and retain your input/output paths. The new convergence checks also apply to old explicit probe budgets.
+## Reading per-event quality and component diagnostics
 
-## Reading the diagnostics
-
-Each accepted component produces a comment line such as:
+The numeric `theta_*.txt` and `std_theta_*.txt` layouts are unchanged. Each std file now has a companion **`std_quality_STA_PH.txt`**, containing supported component members only:
 
 ```text
-# std_component group=TEST_P ref=3 nodes=10 method=exact reason=nonpositive_estimate probes=128 max_rel_se=Inf
+# event_id ref_id method relative_mc_se
 ```
 
-This means Hutchinson did not provide a valid positive diagonal at its 128-probe budget, but the bounded exact fallback supplied the exported uncertainties. It does not mean the exact calculation failed.
+IDs follow the corresponding theta file, including Julia's sequential mapping. Rows are grouped by component and need not be globally sorted. Join by event ID, not row position. Reference rows are labeled `reference`. Other method values are `exact`, `hutch`, `hutch_unconverged`, `pseudo_degree`, `pseudo_weight`, `graph_bound` or deliberately disabled `none`.
 
-| Field or value | Meaning |
+`relative_mc_se` is the pre-repair relative sampling diagnostic. Thus an `exact` repair can carry a large value or `Inf` from the failed stochastic attempt; that value does not describe the accuracy of the repaired std. `NaN` means no sampling diagnostic was taken. These diagnostic missing values are **not** uncertainty values passed to GraphSplit.
+
+Each `# std_component` metrics line includes:
+
+| Field | Meaning |
 | --- | --- |
-| `ref`, `nodes` | Final component reference ID and number of nodes. |
-| `method` | Actual output method: `hutch`, `exact`, `graph_bound`, `pseudo_degree`, `pseudo_weight`, `none`, or `disabled`. |
-| `reason=requested` | Directly requested method, or uncertainty export disabled. |
-| `reason=converged` | Hutchinson passed all per-node diagnostics. |
-| `not_converged` | Positive estimates, but at least one has excessive estimated sampling error. |
-| `nonpositive_estimate` / `nonfinite_estimate` | Invalid diagonal estimate; no clipping is applied. |
-| `insufficient_probes` | Fewer than the required minimum samples. |
-| `disabled_probes` / `size_limit` | Hutchinson was skipped. |
-| `solve_failed` / `invalid_noise_scale` | Numerical solve or residual-noise scale was unusable. |
-| `+exact_size_limit` / `+exact_failed` | Exact fallback was unavailable; the finite `graph_bound` was used. |
-| `+legacy_nan_fallback` | A legacy missing-value fallback was replaced by the finite graph bound. |
-| `probes` | Number of successful random probe solves used, excluding exact unit-vector solves. |
-| `max_rel_se` | Worst estimated relative diagonal MC standard error; `Inf` when invalid/unassessed and `NaN` when no sampling was attempted. |
+| `method` | Actual method, or `hybrid` when different events use different methods. |
+| `reason` | Sampling outcome (`converged`, `not_converged`, `nonpositive_estimate`, `nonfinite_estimate`, `insufficient_probes`, `solve_failed`), a skip reason (`disabled_probes`, `size_limit`, `exact_size_limit`), `exact_failed`, or `requested`. It describes the attempt, before repairs. |
+| `probes`, `max_rel_se` | Actual sampling count and worst pre-repair relative MC standard error. |
+| `hutch_converged` | Number of preserved converged stochastic entries. |
+| `exact_nodes` | Number supplied by full or selected exact calculation. |
+| `repair_attempted`, `repaired_nodes` | Selected solves attempted and successfully used. |
+| `unconverged_nodes` | Retained positive stochastic estimates that failed the requested tolerance. |
+| `fallback_nodes` | Entries supplied by a degree/weight proxy or an explicitly selected graph bound. |
 
-The group-table `sigma_hat` is a reporting median across final components, not a common scale used for all components. Ignore lines beginning with `#` when parsing the tabular group records. Retain these comments with your analysis for provenance.
+The reference is excluded from these counts. `hutch_converged + exact_nodes + unconverged_nodes + fallback_nodes` equals the number of unpinned events when uncertainty is enabled. `pseudo_components_used` counts components using at least one proxy entry. The group-table `sigma_hat` is only a reporting median across final components; each component uses its own scale.
 
-## Floors, precision and downstream use
+## Choosing budgets and using the exports
 
-`robust.min_scale` stabilizes pruning and Huber reweighting. `std.min_sigma` floors the residual-noise scale only when `apply_min_sigma=true`; it does not floor each exported row. Neither setting repairs a failed stochastic variance. A valid graph-scaled std can be smaller than `min_sigma`, and a deliberately disabled noise floor can permit zero uncertainty for exactly consistent synthetic data.
+Start with `auto`. Inspect `unconverged_nodes`, `fallback_nodes` and the quality files, rather than requiring the worst pre-repair diagnostic to pass. If only a few entries are problematic, raise `repair_max_nodes` enough to repair them. If a large fraction fails, more probes or a larger exact calculation may be more useful than a small repair budget. A 128-probe exploratory run can be adequate on favorable graphs, but is not a universal recommendation. Do not loosen `rel_tol` merely to rename noisy entries as converged.
 
-Output precision changes decimal formatting only. Temporary data and pass-2 theta/std storage use single precision. Printing nine or twelve decimal places does not establish nanosecond or picosecond accuracy.
+For final analyses, compare representative components across independent seeds or against exact diagonals. The [November synthetic study](updates/2026-11-12-per-event-uncertainty.md) includes 2,400–5,000-event components, both language implementations, error distributions and failure modes. Even retained positive estimates on a large dense graph can have sizable errors at 2048 probes.
 
-Before combining outputs, verify the event-ID mapping, station-phase identity and component reference. Default uncertainty failures now preserve finite bounds for accepted theta rows. Downstream code still needs to skip rows with missing theta/reference, and handle deliberately disabled uncertainty modes explicitly. A user-configured maximum-sigma filter in a downstream program can still remove conservative bounds; DDSync cannot guarantee relocation geometry or override that filter. Rerun DDSync for previously exported datasets affected by these bugs: old theta files alone do not identify the surviving observation graph, and old clipped std files do not reveal the original negative variance estimates.
+For reproducibility, use Julia's `Random.seed!(1234)` before `DDSync.run(cfg)`, or MATLAB's `rng(1234)` before `ddsync.run(cfg)`. The two languages do not share random streams. Exact calculations provide the basis for cross-language equality checks.
+
+Estimator failure does not deliberately export missing std for accepted theta rows. Defaults preserve finite uncertainties and reference constraints for GraphSplit. Invalid noise scales, underflow/overflow or otherwise unusable fallback values stop the run explicitly. Explicit `mode="none"` or `export=false` remains a theta-only workflow; avoid those choices when downstream uncertainty is required. Rejected/isolated events still have missing theta/reference and must be skipped. A downstream maximum-sigma filter can still remove constraints.
+
+`robust.min_scale` stabilizes pruning/Huber weights. `std.min_sigma` floors the residual-noise scale when enabled, not each row's final std. Disabling this floor permits zero std for exactly consistent synthetic data. Output precision controls decimal formatting only; temporary data and pass-2 storage use single precision. Additional printed decimals do not establish equivalent physical accuracy.
+
+Rerun affected datasets to benefit from per-event handling. Old std files cannot reveal which Hutch estimates had converged before a whole-component fallback replaced them.

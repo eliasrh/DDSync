@@ -26,8 +26,10 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % cfg.std.hutch.probes = 2048;
 % cfg.std.hutch.min_probes = 128;
 % cfg.std.hutch.rel_tol = 0.10;
-% cfg.std.fallback = 'exact';
+% cfg.std.fallback = 'pseudo_degree';
 % cfg.std.exact_max_nred = 2048;
+% cfg.std.repair_max_nodes = 128; % selected full-system exact corrections
+% cfg.std.unconverged = 'keep'; % retain positive estimates with relative MC SE < 1; otherwise fallback
 % STD_MIN_DIAGREL has been retired; negative variances are never clipped.
 
 out = ddsync.run(cfg);

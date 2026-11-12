@@ -1,6 +1,6 @@
 # DDSync (Julia)
 
-Julia is the primary implementation. MATLAB receives bug fixes. See the [18 October 2026 update report](../docs/updates/2026-10-18-pruning-uncertainty.md) and the [uncertainty and probe guide](../docs/uncertainty.md).
+Julia is the primary implementation. MATLAB receives bug fixes. See the [12 November 2026 update report](../docs/updates/2026-11-12-per-event-uncertainty.md) and the [uncertainty and probe guide](../docs/uncertainty.md).
 
 DDSync reads a HypoDD/GrowClust-style `dt.cc` file, processes one station-phase group at a time, and writes a cleaned and synchronized differential-time file. For each station and phase, it estimates one relative arrival-time value, `theta`, for every event that can be constrained by the data. A kept observation between events `i` and `j` is then represented by `theta(i) - theta(j)`.
 
@@ -26,9 +26,9 @@ You can also pass the config file and input paths explicitly:
 julia run_ddsync.jl ddsync_config.toml dt.cc catalog.txt
 ```
 
-The command above uses the bundled example. Replace those two input paths for your own data. Relative paths in TOML are resolved from your working directory, not the config file directory. Use separate output directories for each run; existing output files with matching names are overwritten and old group files are not automatically removed.
+The first command uses the bundled example. Replace those two input paths for your own data. Relative paths in TOML are resolved from your working directory, not the config file directory. Use separate output directories for each run; existing output files with matching names are overwritten and old group files are not automatically removed.
 
-The default uses up to 2048 probes with convergence checks and an exact fallback for at most 2048 unpinned nodes. For fast exploratory weighting on a large file, you can explicitly choose a degree proxy; it is not a statistical uncertainty:
+The default `auto` mode uses exact calculation directly for at most 2048 unpinned events. Larger components use up to 2048 probes, retain converged entries, and repair up to 128 failing entries exactly. Remaining estimates are individually retained with a quality label or given degree fallback. For fast exploratory weighting on a large file, you can explicitly choose a degree proxy; it is not a statistical uncertainty:
 
 ```toml
 [std]
@@ -198,7 +198,7 @@ Optional columns may be added:
 EventID  std_theta  refEventID  degree  thetaWeight  nodeWeight
 ```
 
-`std_theta` is either a checked Hutchinson estimate, an exact inverse-diagonal calculation, a conservative graph bound, a fast pseudo standard deviation, or explicitly disabled (`NaN`) uncertainty, depending on `std.mode` and fallback behavior. `degree` is the number of kept incident edges in the final graph. `thetaWeight` is a practical inverse-uncertainty weight derived from `std_theta`. `nodeWeight` is an optional diagnostic node-weight summary used by `pseudo_weight` mode.
+`std_theta` is a converged or explicitly labeled unconverged Hutchinson estimate, an exact inverse-diagonal calculation, an explicitly requested graph bound, a fast pseudo standard deviation, or explicitly disabled (`NaN`) uncertainty, depending on `std.mode` and fallback behavior. `degree` is the number of kept incident edges in the final graph. `thetaWeight` is a practical inverse-uncertainty weight derived from `std_theta`. `nodeWeight` is an optional diagnostic node-weight summary used by `pseudo_weight` mode.
 
 ### `sync_metrics.txt`
 
@@ -210,7 +210,7 @@ group    n_edges  n_kept  pruned_pct  robust_p50  robust_p05  robust_p95  frac_r
 
 `group` is the station-phase key, `n_edges` is the number of input measurements, and `n_kept` is the number retained after component gating and pruning. `sigma_hat` is the final robust residual scale for reporting and for `std_theta` export. It is not the same thing as `std.min_sigma`.
 
-The group `sigma_hat` is the median of the final component scales; each component uses its own scale for uncertainty. Additional `# std_component` comment lines identify the final reference, node count, actual method, fallback reason, probes used and worst relative Monte Carlo standard error. Ignore comment lines when reading the numeric group table. `method=exact` may indicate a successful fallback; `method=graph_bound` identifies a finite conservative fallback that preserves the surviving reference constraints. See the [diagnostic field guide](../docs/uncertainty.md#reading-the-diagnostics).
+The group `sigma_hat` is the median of the final component scales; each component uses its own scale for uncertainty. Additional `# std_component` comment lines identify the final reference, node count, actual method, fallback reason, probes used and worst relative Monte Carlo standard error. Ignore comment lines when reading the numeric group table. `method=hybrid` means different events used different methods. Counts distinguish converged, exact, retained unconverged and fallback entries; `std_quality_*.txt` identifies them individually. See the [diagnostic field guide](../docs/uncertainty.md#reading-per-event-quality-and-component-diagnostics).
 
 Comment lines at the top also record the catalog event count, whether IDs
 were remapped, and the paths to any ID map and sequential outputs. Check
@@ -355,10 +355,12 @@ For `thetaStd`, DDSync uses `sqrt(std_theta_i^2 + std_theta_j^2)` and ignores co
 
 | Field | Default | Plain-language meaning |
 | --- | ---: | --- |
-| `export` | `true` | Create the `thetastd/` directory and write `std_theta_*.txt`. |
-| `mode` | `"hutch"` | Main method for `std_theta`: `"hutch"`, `"exact"`, `"graph_bound"`, `"pseudo_degree"`, `"pseudo_weight"`, or `"none"`. |
-| `fallback` | `"exact"` | Used if Hutchinson is disabled, size-limited, nonpositive/nonfinite, unconverged, or a solve fails. Choose `"exact"`, `"graph_bound"`, `"pseudo_degree"`, or `"pseudo_weight"`. Legacy `"nan"`/`"none"` fallbacks now use `graph_bound`. |
-| `exact_max_nred` | `2048` | Maximum unpinned nodes for exact mode/fallback. Larger or failed exact solves use the finite `graph_bound` fallback. |
+| `export` | `true` | Write `std_theta_*.txt` and per-event `std_quality_*.txt` in the std directory. |
+| `mode` | `"auto"` | Exact up to the size cap, otherwise per-event Hutchinson with selected exact repair. Explicit `hutch`, `exact`, `graph_bound`, `pseudo_degree`, `pseudo_weight`, and `none` remain available. |
+| `fallback` | `"pseudo_degree"` | Only entries still unusable after repair/retention use fallback. Options: `pseudo_degree`, `pseudo_weight`, `exact`, `graph_bound`. Legacy `nan`/`none` aliases now use degree fallback. |
+| `exact_max_nred` | `2048` | Full exact size cap in unpinned events. `auto` switches to Hutch above it; explicit exact mode above it uses fallback. |
+| `repair_max_nodes` | `128` | Maximum selected full-system exact corrections after Hutch, reusing its factorization. Applies independently of component size. |
+| `unconverged` | `"keep"` | Retain unrepaired positive estimates with enough samples and relative MC SE below 1, labeled `hutch_unconverged`. Use `fallback` to replace all failing entries instead. |
 | `min_sigma` | `5e-4` | Optional residual-noise floor used only for exported Hutchinson, exact, graph-bound and `pseudo_degree` `std_theta`. |
 | `apply_min_sigma` | `true` | Switch for `min_sigma`. Set false, or set `min_sigma` to `0`, to disable the export floor. |
 | `pseudo_weight_source` | `"combined"` | Edge weight source for `pseudo_weight` and `nodeWeight`: `"combined"`, `"robust"`, or `"base"`. |
@@ -366,8 +368,8 @@ For `thetaStd`, DDSync uses `sqrt(std_theta_i^2 + std_theta_j^2)` and ignores co
 | `thetastd_write_weightcol` | `true` | Add the practical `thetaWeight` column to `std_theta_*.txt`. |
 | `thetastd_write_alt_node_weightcol` | `false` | Add `nodeWeight` to `std_theta_*.txt`. If `thetastd_write_weightcol` is also true, this is the sixth column; otherwise it is the fifth. |
 | `probes` | `2048` | Maximum Hutchinson probe budget. Stops early if every node passes the diagnostic. Set `0` to use fallback directly. |
-| `min_probes` | `128` | Minimum samples before accepting convergence (at least 2). A smaller maximum budget forces fallback. |
-| `rel_tol` | `0.10` | Maximum empirical standard error divided by estimated diagonal, for every unpinned node. This is not a guaranteed relative error bound. |
+| `min_probes` | `128` | Minimum samples before accepting convergence (at least 2). A smaller budget permits exact repair or fallback, but no accepted/retained stochastic values. |
+| `rel_tol` | `0.10` | Maximum empirical standard error divided by estimated diagonal, tested independently for each unpinned node. This is not a guaranteed relative error bound. |
 | `probe_dist` | `"rademacher"` | Random probe distribution: `"rademacher"` (`+1/-1`) or `"gaussian"`. |
 | `batch` | `128` | Number of probes solved at once. Larger can be faster but uses more memory. |
 | `report_every_batch` | `10` | Print progress every this many batches. Set `0` to silence batch progress. |
@@ -378,12 +380,15 @@ Mode meanings:
 
 | Mode | Meaning |
 | --- | --- |
-| `"hutch"` | Estimate the diagonal of the inverse graph Laplacian using random probes. Checks sampling error and uses fallback if skipped or unreliable. |
-| `"exact"` | Compute the inverse-Laplacian diagonal using unit-vector solves, within `exact_max_nred`; no sampling noise. Falls back to a graph bound beyond that limit. |
-| `"graph_bound"` | Finite upper bound from retained path resistances. Preserves supported reference constraints without claiming precision from a failed estimator. |
+| `"auto"` | Exact directly for small components, otherwise Hutchinson and per-event repair. |
+| `"hutch"` | Sample even small components. Preserve converged entries, repair selected failures, and retain or replace only remaining failing entries. |
+| `"exact"` | Unit-vector solves up to the full exact cap; no sampling noise. Beyond that limit use configured fallback (degree by default). |
+| `"graph_bound"` | Explicit, potentially very loose upper bound from tree path resistances. Never selected automatically by the defaults. |
 | `"pseudo_degree"` | Fast proxy: `std_theta ~= sigma/sqrt(degree)`. A weighting proxy, not a calibrated or conservative uncertainty. |
 | `"pseudo_weight"` | Fast proxy based on incident edge weights, scaled by `thetastd_scale_fixed`. Ignores `min_sigma`. |
 | `"none"` | Do not compute finite standard deviations. If `std.export` is true, files are still written with `NaN` for non-reference events and `0` for each reference. |
+
+Each std file has a `std_quality_STA_PH.txt` companion listing supported event ID, reference ID, method and pre-repair relative MC standard error. Join by event ID; rows need not be globally sorted. Component metrics count converged, exact, retained unconverged and fallback entries. Existing numeric theta/std columns are unchanged. See the [November update](../docs/updates/2026-11-12-per-event-uncertainty.md).
 
 Hutchinson sampling error usually decreases like `1/sqrt(probes)`, with strong graph dependence. See the [shared uncertainty guide](../docs/uncertainty.md) for choosing a budget, checking convergence, and interpreting fallback.
 
@@ -449,6 +454,6 @@ The numerical formats remain compatible, but automatic ID mapping is specific to
 Run the regression tests from this directory with `julia test/runtests.jl`.
 They exercise large and gapped IDs, unchanged sequential inputs, original
 and sequential outputs, dense and dictionary storage, uncertainty weights,
-and invalid-input protection. They also test post-pruning references, isolated and tree fragments, adaptive estimates against an independent dense-inverse oracle, finite conservative fallback and median scaling. Run `julia test/probe_study.jl` for the separate graph/probe-budget study.
+and invalid-input protection. They also test post-pruning references, isolated and tree fragments, adaptive estimates against an independent dense-inverse oracle, per-event retention and exact repair, explicit graph bounds, degree fallback and median scaling. Run `julia test/large_uncertainty_study.jl` for the new large-component comparison, or `julia test/probe_study.jl` for the earlier sampling-only study.
 
 For the optional downstream check, run `julia test/graphsplit_integration.jl /path/to/GraphSplit.jl`. It reads forced-failure exports through GraphSplit and checks finite reference constraints and graph rank.

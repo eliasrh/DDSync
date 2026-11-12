@@ -59,15 +59,18 @@ cfg.output.theta_weight_cap         = 1.0;      % cap written weights (Inf disab
 cfg.std.export = true;
 
 % mode:
-%   'hutch'         : adaptive Hutchinson; fallback if skipped or unreliable
-%   'exact'         : deterministic diagonal, then graph bound beyond size cap
+%   'auto'          : exact below the size cap, otherwise per-event Hutch/repair
+%   'hutch'         : adaptive Hutchinson, selected exact repair, per-event fallback
+%   'exact'         : deterministic diagonal up to size cap, otherwise fallback
 %   'graph_bound'   : finite conservative bound from retained path resistances
 %   'pseudo_degree' : always pseudo std from node degree (fast)
 %   'pseudo_weight' : always pseudo std from node weight (fast)
 %   'none'          : NaN std except reference=0; export controls file writing
-cfg.std.mode     = 'hutch';
-cfg.std.fallback = 'exact';  % skipped/failed Hutch: 'exact'|'graph_bound'|'pseudo_degree'|'pseudo_weight'
-cfg.std.exact_max_nred = 2048; % exact solve size cap; beyond this use a finite graph bound
+cfg.std.mode     = 'auto'; % exact for small components; otherwise Hutch with per-event repair
+cfg.std.fallback = 'pseudo_degree'; % only entries still unusable after selected exact repair
+cfg.std.exact_max_nred = 2048; % full exact cap; auto switches to Hutch above it
+cfg.std.repair_max_nodes = 128; % selected full-system solves, reusing Hutch factorization
+cfg.std.unconverged = 'keep'; % retain positive estimates with relative MC SE < 1; or 'fallback'
 
 % Pseudo-weight settings (used if std.mode or std.fallback uses pseudo_weight)
 cfg.std.pseudo_weight_source = 'combined';  % 'combined'|'robust'|'base'
@@ -83,7 +86,7 @@ cfg.std.pseudo_weight_eps    = 1e-6;        % floor on node weight before invers
 cfg.std.write_weight_column     = true;
 cfg.std.write_alt_weight_column = false;
 
-% Hutchinson settings (only used if std.mode='hutch')
+% Hutchinson settings (used by 'hutch' and large components in 'auto')
 cfg.std.hutch.probes            = 2048;      % maximum; stop early when convergence checks pass
 cfg.std.hutch.min_probes        = 128;
 cfg.std.hutch.rel_tol           = 0.10;      % max per-node MC standard error / diagonal

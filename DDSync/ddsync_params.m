@@ -22,11 +22,16 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 
 % Optional: a fast weighting proxy (not a statistical uncertainty)
 % cfg.std.mode = 'pseudo_degree';
-% Adaptive Hutchinson: maximum budget, early convergence checks, safe fallback.
+% Defaults: exact for small components, otherwise per-event Hutch and repair.
+% cfg.std.mode = 'auto';
+% cfg.std.exact_max_nred = 2048;
+% cfg.std.repair_max_nodes = 128;
+% cfg.std.unconverged = 'keep'; % retain positive unresolved estimates with relative MC SE < 1
+% cfg.std.fallback = 'pseudo_degree'; % practical proxy, not calibrated uncertainty
 % cfg.std.hutch.probes = 2048;
 % cfg.std.hutch.min_probes = 128;
 % cfg.std.hutch.rel_tol = 0.10;
-% Read # std_component diagnostics in sync_metrics.txt before using uncertainties.
+% Read std_quality_*.txt and # std_component diagnostics before using uncertainties.
 % See ../docs/uncertainty.md for probe selection and fallback behavior.
 
 

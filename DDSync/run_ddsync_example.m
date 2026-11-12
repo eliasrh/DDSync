@@ -26,8 +26,11 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 
 % Optional: standard deviation / weights export
 % cfg.std.mode     = 'pseudo_degree'; % faster than Hutch
-% cfg.std.fallback = 'exact'; % also handles negative/unconverged estimates
+% cfg.std.mode = 'auto'; % exact for small components, otherwise per-event Hutch/repair
+% cfg.std.fallback = 'pseudo_degree'; % only unresolved entries; graph_bound is opt-in
 % cfg.std.exact_max_nred = 2048;
+% cfg.std.repair_max_nodes = 128; % selected full-system exact corrections
+% cfg.std.unconverged = 'keep'; % retain positive estimates with relative MC SE < 1; otherwise fallback
 % cfg.std.min_sigma = 5e-4;       % residual-noise floor for exported std_theta
 % cfg.std.apply_min_sigma = true; % set false (or min_sigma=[]/0) to disable
 

@@ -47,13 +47,14 @@ include("fixture_config.jl")
         # Exceeding the exact size cap preserves finite conservative uncertainties.
         cfg=split_config(joinpath(root,"bound"),mode="hutch")
         cfg[:std][:probes]=1;cfg[:std][:exact_max_nred]=0
+        cfg[:std][:fallback]="graph_bound";cfg[:std][:repair_max_nodes]=0
         execute(cfg)
         sd=readdlm(joinpath(cfg[:io][:thetastd_dir],"std_theta_TEST_P.txt"),Float64)
         @test all(isfinite,sd[1:20,2])
         @test all(sd[setdiff(1:20,[3,13]),2].>0)
         @test all(sd[setdiff(1:20,[3,13]),5].>0)
         @test all(isnan,sd[21:23,2])
-        @test occursin("exact_size_limit",read(cfg[:io][:metrics_file],String))
+        @test occursin("fallback_nodes=9",read(cfg[:io][:metrics_file],String))
         @test all(l->parse(Float64,split(l)[3])>0,filter(l->!startswith(l,"#"),readlines(cfg[:io][:out_dt_sync])))
         @test occursin("method=graph_bound",read(cfg[:io][:metrics_file],String))
         # A tree separated from cyclic components has no residual redundancy.
@@ -69,7 +70,7 @@ include("fixture_config.jl")
         cfg=split_config(joinpath(root,"median"))
         cfg[:io][:infile_dt]=joinpath(dirname(cfg[:io][:infile_dt]),"median.cc")
         cfg[:robust][:MIN_EDGES]=3
-        cfg[:std][:exact_max_nred]=2
+        cfg[:std][:exact_max_nred]=2;cfg[:std][:fallback]="graph_bound"
         cfg[:output][:thetastd_scale_mode]="median"
         execute(cfg)
         for line in filter(l->!startswith(l,"#"),readlines(cfg[:io][:out_dt_sync]))

@@ -124,6 +124,7 @@ fprintf(fidm,'# K_SIGMA=%g MIN_EDGES=%d IRLS_ITERS=%d C_HUBER=%g MODE=%s STD_EXP
     K_SIGMA, MIN_EDGES, IRLS_ITERS, C_HUBER, OUTPUT_WEIGHT_MODE, EXPORT_THETA_STD, THETASTD_MODE, STD_PROBES);
 fprintf(fidm,'# STD_MIN_PROBES=%d STD_REL_TOL=%g STD_BATCH=%d STD_FALLBACK=%s STD_EXACT_MAX_NRED=%d\n', ...
     cfg.std.hutch.min_probes, cfg.std.hutch.rel_tol, STD_BATCH, THETASTD_FALLBACK, cfg.std.exact_max_nred);
+fprintf(fidm,'# STD_REPAIR_MAX_NODES=%d STD_UNCONVERGED=%s\n',cfg.std.repair_max_nodes,cfg.std.unconverged);
 fprintf(fidm,'group\tn_edges\tn_kept\tpruned_pct\trobust_p50\trobust_p05\trobust_p95\tfrac_robust_lt_0p99\tsigma_hat\n');
 
 for g=1:nGroups
@@ -151,7 +152,7 @@ for g=1:nGroups
             STD_PROBES, STD_PROBE_DIST, STD_BATCH, STD_REPORT_EVERY_BATCH, ...
             STD_MAX_NRED, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_MIN_DIAGREL, ...
             PSEUDO_WEIGHT_SOURCE, PSEUDO_WEIGHT_EPS, ...
-            THETASTD_SCALE_FIXED, cfg.std.hutch.min_probes, cfg.std.hutch.rel_tol, cfg.std.exact_max_nred, WRITE_ALT_NODE_WEIGHTCOL);
+            THETASTD_SCALE_FIXED, cfg.std.hutch.min_probes, cfg.std.hutch.rel_tol, cfg.std.exact_max_nred, WRITE_ALT_NODE_WEIGHTCOL, cfg.std.repair_max_nodes, cfg.std.unconverged);
 
     if pseudo_info.used_pseudo
         nPseudoGroups = nPseudoGroups + 1;
@@ -159,8 +160,9 @@ for g=1:nGroups
     end
 
     for d = pseudo_info.components
-        fprintf(fidm,'# std_component group=%s ref=%d nodes=%d method=%s reason=%s probes=%d max_rel_se=%.6g\n', ...
-            key, d.ref, d.nodes, d.method, d.reason, d.probes, d.max_rel_se);
+        fprintf(fidm,'# std_component group=%s ref=%d nodes=%d method=%s reason=%s probes=%d max_rel_se=%.6g hutch_converged=%d exact_nodes=%d repair_attempted=%d repaired_nodes=%d unconverged_nodes=%d fallback_nodes=%d\n', ...
+            key, d.ref, d.nodes, d.method, d.reason, d.probes, d.max_rel_se, ...
+            d.hutch_converged,d.exact_nodes,d.repair_attempted,d.repaired_nodes,d.unconverged_nodes,d.fallback_nodes);
         if ~ismember(d.reason, {'converged','requested'})
             fprintf('  [STD] ref=%d: %s; method=%s, probes=%d, max_rel_se=%.3g\n', ...
                 d.ref, d.reason, d.method, d.probes, d.max_rel_se);
@@ -183,6 +185,7 @@ for g=1:nGroups
     % write std + degree (+ optional weight columns)
     if EXPORT_THETA_STD
         std_fn = fullfile(THETASTD_DIR, sprintf('std_theta_%s_%s.txt', sta, ph));
+        writeStdQuality(fullfile(THETASTD_DIR,sprintf('std_quality_%s_%s.txt',sta,ph)),pseudo_info.components);
         writeThetaStdWithDegree(std_fn, std_full, ref_full, deg_full, ...
             THETASTD_SCALE_FIXED, THETASTD_WEIGHT_CAP, ...
             WRITE_THETASTD_WEIGHTCOL, WRITE_ALT_NODE_WEIGHTCOL, nodew_full, THETASTD_DECIMALS);
@@ -593,7 +596,7 @@ function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full
         EXPORT_THETA_STD, THETASTD_MODE, THETASTD_FALLBACK, ...
         STD_PROBES, STD_PROBE_DIST, STD_BATCH, STD_REPORT_EVERY_BATCH, ...
         STD_MAX_NRED, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_MIN_DIAGREL, ...
-        PSEUDO_WEIGHT_SOURCE, PSEUDO_WEIGHT_EPS, THETASTD_SCALE_FIXED, STD_MIN_PROBES, STD_REL_TOL, STD_EXACT_MAX_NRED, WRITE_ALT_NODEW_COL)
+        PSEUDO_WEIGHT_SOURCE, PSEUDO_WEIGHT_EPS, THETASTD_SCALE_FIXED, STD_MIN_PROBES, STD_REL_TOL, STD_EXACT_MAX_NRED, WRITE_ALT_NODEW_COL, STD_REPAIR_MAX_NODES, STD_UNCONVERGED)
 
     ev_all = unique([gi(:); gj(:)]);
     nNodes = numel(ev_all);
@@ -669,32 +672,22 @@ function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full
             nodew_c=accumarray([a;b],[src;src],[n_c,1])./deg_kept;
             nodew_local(nodes_c)=nodew_c;
         end
-        std_c=NaN(n_c,1);
-        info=struct('method','disabled','reason','requested','probes',0,'max_rel_se',NaN);
-        if EXPORT_THETA_STD
-            opts=struct('mode',lower(THETASTD_MODE),'fallback',lower(THETASTD_FALLBACK), ...
-                'probes',STD_PROBES,'probe_dist',lower(STD_PROBE_DIST),'batch',STD_BATCH, ...
-                'report_every_batch',STD_REPORT_EVERY_BATCH,'max_nred',STD_MAX_NRED, ...
-                'min_probes',STD_MIN_PROBES,'rel_tol',STD_REL_TOL,'exact_max_nred',STD_EXACT_MAX_NRED);
-            [std_c,info]=ddsync.estimate_theta_std(n_c,a,b,w_eff,pin,keep_idx,RIDGE_EPS, ...
-                sigmaForThetaStd(sigma_hat,STD_MIN_SIGMA,STD_APPLY_MIN_SIGMA),opts);
-            if strcmp(info.method,'pseudo_degree')
-                std_c=sigmaForThetaStd(sigma_hat,STD_MIN_SIGMA,STD_APPLY_MIN_SIGMA)./sqrt(deg_kept);
-            elseif strcmp(info.method,'pseudo_weight')
-                std_c=1./(max(nodew_c,PSEUDO_WEIGHT_EPS)*THETASTD_SCALE_FIXED);
-            end
-            if ismember(info.method,{'pseudo_degree','pseudo_weight'})
-                pseudo_info.used_pseudo=true;
-                pseudo_info.n_pseudo_comps=pseudo_info.n_pseudo_comps+1;
-            end
-            std_c(pin)=0; % gauge constraint, not an observation of zero noise
+        mode=lower(THETASTD_MODE);if ~EXPORT_THETA_STD,mode='none';end
+        opts=struct('mode',mode,'fallback',lower(THETASTD_FALLBACK), ...
+            'probes',STD_PROBES,'probe_dist',lower(STD_PROBE_DIST),'batch',STD_BATCH, ...
+            'report_every_batch',STD_REPORT_EVERY_BATCH,'max_nred',STD_MAX_NRED, ...
+            'min_probes',STD_MIN_PROBES,'rel_tol',STD_REL_TOL,'exact_max_nred',STD_EXACT_MAX_NRED, ...
+            'repair_max_nodes',STD_REPAIR_MAX_NODES,'unconverged',lower(STD_UNCONVERGED));
+        weight_proxy=1./(max(nodew_c,PSEUDO_WEIGHT_EPS)*THETASTD_SCALE_FIXED);
+        [std_c,info]=ddsync.estimate_theta_std(n_c,a,b,w_eff,pin,keep_idx,RIDGE_EPS, ...
+            sigmaForThetaStd(sigma_hat,STD_MIN_SIGMA,STD_APPLY_MIN_SIGMA),opts,weight_proxy);
+        if ~EXPORT_THETA_STD,info.method='disabled';end
+        if any(ismember(info.node_methods,{'pseudo_degree','pseudo_weight'}))
+            pseudo_info.used_pseudo=true;pseudo_info.n_pseudo_comps=pseudo_info.n_pseudo_comps+1;
         end
-        info.ref=ev_all(nodes_c(pin)); info.nodes=n_c;
-        if isempty(pseudo_info.components)
-            pseudo_info.components=info;
-        else
-            pseudo_info.components(end+1)=info;
-        end
+        info.ref=ev_all(nodes_c(pin));info.nodes=n_c;info.event_ids=ev_all(nodes_c);
+        if isempty(pseudo_info.components),pseudo_info.components=info;
+        else,pseudo_info.components(end+1)=info;end
         theta_local(nodes_c)=theta_c; ref_local(nodes_c)=ev_all(nodes_c(pin));
         std_local(nodes_c)=std_c; wrob_full(idx_e)=wrob_c;
     end
@@ -806,4 +799,14 @@ function value = percentile(x,p)
     rank=1+(numel(x)-1)*p/100;
     low=floor(rank);high=ceil(rank);
     value=x(low)+(rank-low)*(x(high)-x(low));
+end
+
+function writeStdQuality(path,components)
+    fid=fopen(path,'w');cleanup=onCleanup(@()fclose(fid)); %#ok<NASGU>
+    fprintf(fid,'# event_id ref_id method relative_mc_se\n');
+    for info=components
+        for i=1:numel(info.event_ids)
+            fprintf(fid,'%d %d %s %.9g\n',info.event_ids(i),info.ref,info.node_methods{i},info.node_rel_se(i));
+        end
+    end
 end

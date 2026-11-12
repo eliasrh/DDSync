@@ -83,12 +83,14 @@ function config_default()
 
     cfg[:std] = Dict{Symbol,Any}(
         :export                           => true,
-        :mode                             => "hutch",         # "hutch" | "exact" | "graph_bound" | "pseudo_degree" | "pseudo_weight" | "none"
-        :fallback                         => "exact",         # skipped/failed Hutch: bounded exact solve, then finite graph bound
+        :mode                             => "auto",          # exact for small components, otherwise per-event Hutch/repair
+        :fallback                         => "pseudo_degree", # only entries still unusable after selected exact repair
         :probes                           => 2048,           # maximum; stop early when diagnostics pass
         :min_probes                       => 128,
         :rel_tol                          => 0.10,           # maximum per-node MC standard error / diagonal
         :exact_max_nred                   => 2048,
+        :repair_max_nodes                 => 128,            # selected full-system solves; reuses Hutch factorization
+        :unconverged                      => "keep",         # retain positive estimates with relative MC SE < 1; or "fallback"
         :probe_dist                       => "rademacher",    # "rademacher" | "gaussian"
         :batch                            => 128,
         :report_every_batch               => 10,
@@ -244,6 +246,7 @@ function run(cfg::Dict{Symbol,Any}=config_default())
         EXPORT_THETA_STD ? 1 : 0, STD_PROBES, dist_print, thetastd_mode_print)
     @printf(fidm, "# STD_MIN_PROBES=%d STD_REL_TOL=%g STD_BATCH=%d STD_FALLBACK=%s STD_EXACT_MAX_NRED=%d\n",
         std_cfg[:min_probes], std_cfg[:rel_tol], STD_BATCH, THETASTD_FALLBACK, std_cfg[:exact_max_nred])
+    @printf(fidm, "# STD_REPAIR_MAX_NODES=%d STD_UNCONVERGED=%s\n", std_cfg[:repair_max_nodes], std_cfg[:unconverged])
     @printf(fidm, "group\tn_edges\tn_kept\tpruned_pct\trobust_p50\trobust_p05\trobust_p95\tfrac_robust_lt_0p99\tsigma_hat\n")
     flush(fidm)
 
@@ -293,11 +296,13 @@ function run(cfg::Dict{Symbol,Any}=config_default())
             WRITE_ALT_NODEW_COL=WRITE_THETASTD_ALT_NODEW_COL,
             STD_MIN_PROBES=Int(std_cfg[:min_probes]), STD_REL_TOL=Float64(std_cfg[:rel_tol]),
             STD_EXACT_MAX_NRED=Int(std_cfg[:exact_max_nred]),
+            STD_REPAIR_MAX_NODES=Int(std_cfg[:repair_max_nodes]), STD_UNCONVERGED=lowercase(String(std_cfg[:unconverged])),
         )
 
         for info in pseudo_info.components
-            @printf(fidm, "# std_component group=%s ref=%d nodes=%d method=%s reason=%s probes=%d max_rel_se=%.6g\n",
-                key, info.ref, info.nodes, info.method, info.reason, info.probes, info.max_rel_se)
+            @printf(fidm, "# std_component group=%s ref=%d nodes=%d method=%s reason=%s probes=%d max_rel_se=%.6g hutch_converged=%d exact_nodes=%d repair_attempted=%d repaired_nodes=%d unconverged_nodes=%d fallback_nodes=%d\n",
+                key, info.ref, info.nodes, info.method, info.reason, info.probes, info.max_rel_se,
+                info.hutch_converged, info.exact_nodes, info.repair_attempted, info.repaired_nodes, info.unconverged_nodes, info.fallback_nodes)
             if info.reason != "converged" && info.reason != "requested"
                 @printf("  [STD] ref=%d: %s; method=%s, probes=%d, max_rel_se=%.3g\n",
                     info.ref, info.reason, info.method, info.probes, info.max_rel_se)
@@ -362,6 +367,7 @@ function run(cfg::Dict{Symbol,Any}=config_default())
 
         if EXPORT_THETA_STD
             std_fn = joinpath(thetastd_dir, @sprintf("std_theta_%s_%s.txt", sta, ph))
+            writeStdQuality(joinpath(thetastd_dir, @sprintf("std_quality_%s_%s.txt",sta,ph)), pseudo_info.components)
             writeThetaStdWithDegree(std_fn, maxEventID,
                 ev_all, std_local, ref_local, deg_local, nodew_local;
                 write_weightcol=WRITE_THETASTD_WEIGHTCOL,
@@ -1046,7 +1052,8 @@ function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{F
     PSEUDO_WEIGHT_EPS::Float64,
     THETASTD_SCALE_FIXED::Float64,
     WRITE_ALT_NODEW_COL::Bool=false,
-    STD_MIN_PROBES::Int=128, STD_REL_TOL::Float64=0.10, STD_EXACT_MAX_NRED::Int=2048)
+    STD_MIN_PROBES::Int=128, STD_REL_TOL::Float64=0.10, STD_EXACT_MAX_NRED::Int=2048,
+    STD_REPAIR_MAX_NODES::Int=128, STD_UNCONVERGED::String="keep")
 
     ev_all = sort(unique(vcat(gi, gj)))
     nNodes = length(ev_all)
@@ -1134,59 +1141,17 @@ function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{F
             nodew_local[nodes_c] .= nodew_c
         end
 
-        std_c = fill(NaN, n_c)
-        method = EXPORT_THETA_STD ? THETASTD_MODE : "disabled"
-        info = (reason="requested", probes=0, max_rel_se=NaN)
-        if EXPORT_THETA_STD
-            if method == "hutch"
-                if STD_PROBES <= 0 || length(keep_idx) > STD_MAX_NRED
-                    info = (reason=STD_PROBES <= 0 ? "disabled_probes" : "size_limit", probes=0, max_rel_se=NaN)
-                else
-                    std_c, info = estimateThetaStdHutch(n_c, a, b, w_eff, pin, keep_idx, RIDGE_EPS,
-                        sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_PROBES, STD_PROBE_DIST,
-                        STD_BATCH, STD_REPORT_EVERY, STD_MIN_DIAGREL;
-                        min_probes=STD_MIN_PROBES, rel_tol=STD_REL_TOL)
-                end
-                if info.reason != "converged"
-                    method = THETASTD_FALLBACK
-                end
-            end
-            if method == "exact"
-                if length(keep_idx) <= STD_EXACT_MAX_NRED
-                    std_c, exact_ok = estimateThetaStdExact(n_c, a, b, w_eff, pin, keep_idx, RIDGE_EPS,
-                        sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_BATCH)
-                    if !exact_ok
-                        method = "graph_bound"
-                        info = merge(info, (reason=info.reason * "+exact_failed",))
-                    end
-                else
-                    method = "graph_bound"
-                    info = merge(info, (reason=info.reason * "+exact_size_limit",))
-                end
-            elseif method == "pseudo_degree"
-                std_c = sigmaForThetaStd(sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA) ./ sqrt.(deg_kept)
-                n_pseudo_comps += 1
-            elseif method == "pseudo_weight"
-                std_c = 1.0 ./ (max.(nodew_c, PSEUDO_WEIGHT_EPS) .* THETASTD_SCALE_FIXED)
-                n_pseudo_comps += 1
-            end
-            # Retired NaN fallbacks now use a finite bound: GraphSplit may
-            # interpret missing std as its minimum sigma, creating false precision.
-            if THETASTD_MODE == "hutch" && method in ("nan", "none")
-                method = "graph_bound"
-                info = merge(info, (reason=info.reason * "+legacy_nan_fallback",))
-            end
-            if method == "graph_bound"
-                std_c = estimateThetaStdGraphBound(n_c, a, b, w_eff, pin,
-                    sigmaForThetaStd(sigma_hat, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA))
-            elseif method == "none"
-                std_c .= NaN
-            end
-            std_c[pin] = 0.0 # a gauge constraint, not an observation of zero noise
-        end
-        ref = ev_all[nodes_c[pin]]
-        push!(diagnostics, (ref=ref, nodes=n_c, method=method, reason=info.reason,
-                            probes=info.probes, max_rel_se=info.max_rel_se))
+        opts=(mode=EXPORT_THETA_STD ? THETASTD_MODE : "none",fallback=THETASTD_FALLBACK,
+            probes=STD_PROBES,probe_dist=STD_PROBE_DIST,batch=STD_BATCH,report_every_batch=STD_REPORT_EVERY,
+            max_nred=STD_MAX_NRED,min_probes=STD_MIN_PROBES,rel_tol=STD_REL_TOL,
+            exact_max_nred=STD_EXACT_MAX_NRED,repair_max_nodes=STD_REPAIR_MAX_NODES,unconverged=STD_UNCONVERGED)
+        weight_proxy=1.0 ./ (max.(nodew_c,PSEUDO_WEIGHT_EPS).*THETASTD_SCALE_FIXED)
+        std_c,info=estimateThetaStd(n_c,a,b,w_eff,pin,keep_idx,RIDGE_EPS,
+            sigmaForThetaStd(sigma_hat,STD_MIN_SIGMA,STD_APPLY_MIN_SIGMA),opts;pseudo_weight=weight_proxy)
+        EXPORT_THETA_STD || (info=merge(info,(method="disabled",)))
+        any(m->m in ("pseudo_degree","pseudo_weight"),info.node_methods) && (n_pseudo_comps+=1)
+        ref=ev_all[nodes_c[pin]]
+        push!(diagnostics,merge(info,(ref=ref,nodes=n_c,event_ids=ev_all[nodes_c])))
         theta_local[nodes_c] .= theta_c
         ref_local[nodes_c] .= Float64(ref)
         std_local[nodes_c] .= std_c

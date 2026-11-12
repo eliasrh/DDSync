@@ -1,5 +1,7 @@
 # DDSync maintenance update — 18 October 2026
 
+**Historical report:** the [12 November update](2026-11-12-per-event-uncertainty.md) supersedes the uncertainty defaults and whole-component fallback policy described here. The post-pruning reference fix remains.
+
 Julia remains the primary implementation. This update fixes the same numerical bugs in the supported MATLAB implementation and updates both manuals and configuration examples.
 
 ## Changes

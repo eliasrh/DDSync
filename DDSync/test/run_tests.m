@@ -45,14 +45,22 @@ check(contains(metrics,'method=exact'));check(contains(metrics,'probes=1'));
 sd=readmatrix(fullfile(cfg.io.thetastd_dir,'std_theta_TEST_P.txt'));
 check(all(sd(setdiff(1:20,[3,13]),2)>1e-5));
 cfg=split_config(fullfile(output_root,'bound'));cfg.std.mode='hutch';cfg.std.hutch.probes=1;cfg.std.exact_max_nred=0;
+cfg.std.fallback='graph_bound';cfg.std.repair_max_nodes=0;
 evalc('ddsync.run(cfg);');
 sd=readmatrix(fullfile(cfg.io.thetastd_dir,'std_theta_TEST_P.txt'));
 check(all(isfinite(sd(1:20,2))));check(all(sd(setdiff(1:20,[3,13]),2)>0));
 check(all(sd(setdiff(1:20,[3,13]),5)>0));check(all(isnan(sd(21:23,2))));
-check(contains(fileread(cfg.io.metrics_file),'exact_size_limit'));
+check(contains(fileread(cfg.io.metrics_file),'fallback_nodes=9'));
 check(contains(fileread(cfg.io.metrics_file),'method=graph_bound'));
 lines=readlines(cfg.io.out_dt_sync); obs=lines(~startsWith(lines,'#') & strlength(lines)>0);
 for k=1:numel(obs), fields=split(strtrim(obs(k)));check(str2double(fields(3))>0);end
+cfg=split_config(fullfile(output_root,'degree'));cfg.std.mode='hutch';cfg.std.hutch.probes=1;cfg.std.repair_max_nodes=0;
+evalc('ddsync.run(cfg);');
+sd=readmatrix(fullfile(cfg.io.thetastd_dir,'std_theta_TEST_P.txt'));
+check(all(isfinite(sd(1:20,2))) && all(sd(setdiff(1:20,[3,13]),2)>0));
+check(contains(fileread(cfg.io.metrics_file),'method=pseudo_degree'));
+quality=readlines(fullfile(cfg.io.thetastd_dir,'std_quality_TEST_P.txt'));
+check(sum(contains(quality,' pseudo_degree '))==18);check(sum(contains(quality,' reference '))==2);
 cfg=split_config(fullfile(output_root,'split_tree'));cfg.robust.min_edges=3;
 cfg.io.infile_dt=fullfile(fileparts(cfg.io.infile_dt),'split_tree.cc');
 evalc('ddsync.run(cfg);');
@@ -60,7 +68,7 @@ theta=readmatrix(fullfile(cfg.io.thetadir,'theta_TEST_P.txt'));
 check(all(theta(1:3,3)==1));check(all(theta(4:6,3)==4));check(all(isnan(theta(7:23,2:3)),'all'));
 cfg=split_config(fullfile(output_root,'median'));cfg.robust.min_edges=3;
 cfg.io.infile_dt=fullfile(fileparts(cfg.io.infile_dt),'median.cc');
-cfg.std.exact_max_nred=2;cfg.output.theta_weight_scale_mode='median';
+cfg.std.exact_max_nred=2;cfg.std.fallback='graph_bound';cfg.output.theta_weight_scale_mode='median';
 evalc('ddsync.run(cfg);');
 lines=readlines(cfg.io.out_dt_sync);obs=lines(~startsWith(lines,'#') & strlength(lines)>0);
 for k=1:numel(obs)
@@ -121,6 +129,7 @@ check(failed); % stop rather than export a usable theta with missing sigma
 cfg=ddsync.config_default();cfg.std.hutch.batch=0;failed=false;
 try,ddsync.validate_std_config(cfg.std);catch,failed=true;end
 check(failed);
+checks=checks+per_event_tests();
 fprintf('MATLAB regression tests: %d checks passed.\n',checks);
     function check(condition)
         assert(all(condition,'all'),'Regression check %d failed',checks+1);

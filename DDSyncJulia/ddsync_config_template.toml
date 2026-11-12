@@ -57,16 +57,18 @@
 
 [std]
 export = true
-mode = "hutch"                 # "hutch" | "exact" | "graph_bound" | "pseudo_degree" | "pseudo_weight" | "none"
-fallback = "exact"             # also triggered by negative/nonfinite or unconverged estimates and solve failures
-exact_max_nred = 2048            # bound exact fallback cost; beyond this, use a finite conservative graph bound
+mode = "auto"                  # exact for small components, otherwise per-event Hutch/repair
+fallback = "pseudo_degree"     # only unresolved entries; graph_bound is explicit opt-in
+exact_max_nred = 2048           # full exact cap; auto switches to Hutch above it
+repair_max_nodes = 128          # selected full-system exact solves, reusing Hutch factorization
+unconverged = "keep"            # keep positive unresolved estimates with relative MC SE < 1; or "fallback"
 
-# probes is a MAXIMUM budget, not a claim of convergence. Stops early when
-# every unpinned node has relative MC standard error <= rel_tol.
-# 128 may suffice on favorable graphs; inspect # std_component in metrics.
-# Raise the budget (e.g. 8192) for nonconverged large components.
-# A nonpositive estimate at the budget limit uses fallback; it is never floored.
-# See ../docs/uncertainty.md. Set probes=0 to use fallback directly.
+# Maximum stochastic budget; successful entries survive failures elsewhere.
+# At the budget limit, repair invalid or unconverged entries individually.
+# Negative/nonfinite or near-zero noisy estimates are never clipped to a floor.
+# Inspect std_quality_*.txt and per-component method counts in sync_metrics.txt.
+# See ../docs/uncertainty.md. In auto mode, small components use no probes.
+# probes=0 skips Hutch; fallback applies (exact fallback still respects its cap).
 probes = 2048
 min_probes = 128
 rel_tol = 0.10                  # MC SE / diagonal; not a guaranteed relative error bound

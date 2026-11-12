@@ -11,11 +11,13 @@ The synchronization algorithm and its defaults are shared. Input-ID handling
 differs: Julia now maps arbitrary integer IDs automatically, while MATLAB
 still requires users to prepare compact positive IDs before running.
 
-## Update (18 October 2026): references after pruning and reliable uncertainty export
+## Update (12 November 2026): preserve useful Hutchinson estimates
 
-Both Julia and MATLAB now rebuild components after pruning, choose a reference within each surviving component, and refit independently. Negative or unconverged stochastic variance estimates trigger fallback instead of being clipped into false precision. The default is an adaptive **maximum of 2048 probes**, with checked exact fallback for small components and a finite conservative graph bound if exact calculation cannot be used.
+Uncertainty decisions are now made per event. Small components use exact calculation directly; larger ones retain converged Hutchinson estimates and use selected full-system exact solves to repair troublesome entries. Remaining usable positive estimates can be retained with an explicit quality label. The default final fallback is `pseudo_degree`; graph bounds are now opt-in. Numeric theta/std file layouts are unchanged, and new `std_quality_*.txt` files identify each event's method.
 
-Read the [update and validation report](docs/updates/2026-10-18-pruning-uncertainty.md) and the [probe-budget and uncertainty guide](docs/uncertainty.md). Rerun affected datasets; never connect theta stars across different reference IDs.
+Read the [update and large-component test report](docs/updates/2026-11-12-per-event-uncertainty.md) and the [uncertainty guide](docs/uncertainty.md) for defaults, limits and migration. Degree fallback is a practical weighting proxy and can underestimate uncertainty across weak connections.
+
+The [October update](docs/updates/2026-10-18-pruning-uncertainty.md) fixed references after pruning. That fix remains: never connect theta stars across different reference IDs. November supersedes its whole-component graph-bound fallback policy.
 
 ## Try the bundled example in Julia
 

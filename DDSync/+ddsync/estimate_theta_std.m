@@ -1,83 +1,87 @@
-function [out,info] = estimate_theta_std(n,a,b,w,pin,free,ridge,sigma,opts)
-%ESTIMATE_THETA_STD Checked Hutchinson estimates and bounded exact fallback.
-% Pseudo modes are filled by the caller. No failed variance is floored.
-out=NaN(n,1); out(pin)=0;
-info=struct('method',opts.mode,'reason','requested','probes',0,'max_rel_se',NaN);
-valid=isfinite(w) & w>0; aa=a(valid); bb=b(valid); ww=w(valid);
-W=sparse([aa;bb],[bb;aa],[ww;ww],n,n);
-L=spdiags(sum(W,2),0,n,n)-W;
-L=L(free,free)+ridge*speye(numel(free));
-nr=numel(free);
-if strcmp(info.method,'hutch')
-    if opts.probes<=0
-        info.reason='disabled_probes';
-    elseif nr>opts.max_nred
-        info.reason='size_limit';
+function [out,info] = estimate_theta_std(n,a,b,w,pin,free,ridge,sigma,opts,pseudo_weight)
+%ESTIMATE_THETA_STD Per-event Hutch decisions, selected exact repair and fallback.
+if nargin<10,pseudo_weight=NaN(n,1);end
+if ~isfield(opts,'repair_max_nodes'),opts.repair_max_nodes=128;end
+if ~isfield(opts,'unconverged'),opts.unconverged='keep';end
+free=free(:);nr=numel(free);out=NaN(n,1);out(pin)=0;
+methods=repmat({'unavailable'},n,1);methods{pin}='reference';relative=NaN(n,1);
+reason='requested';probes=0;max_rel_se=NaN;repaired=0;attempted=0;mode=opts.mode;
+if strcmp(mode,'auto')
+    if nr<=opts.exact_max_nred,mode='exact';else,mode='hutch';end
+end
+if ~strcmp(mode,'none')
+    assert(isfinite(sigma) && sigma>=0,'Uncertainty needs a finite nonnegative noise scale; inspect residuals and std.min_sigma.');
+end
+fallback=opts.fallback;
+if ismember(fallback,{'exact','nan','none'}),fallback='pseudo_degree';end
+if strcmp(mode,'hutch') && (opts.probes<=0 || nr>opts.max_nred) && strcmp(opts.fallback,'exact') && nr<=opts.exact_max_nred
+    if opts.probes<=0,reason='disabled_probes';else,reason='size_limit';end
+    mode='exact';
+end
+if ismember(mode,{'exact','hutch'})
+    if strcmp(mode,'exact') && nr>opts.exact_max_nred
+        reason='exact_size_limit';
+    elseif strcmp(mode,'hutch') && (opts.probes<=0 || nr>opts.max_nred)
+        if opts.probes<=0,reason='disabled_probes';else,reason='size_limit';end
     else
-        try
-            R=chol(L,'lower');
-            mu=zeros(nr,1); m2=zeros(nr,1); count=0;
-            info.reason='insufficient_probes';
-            for bi=1:ceil(opts.probes/opts.batch)
-                k=min(opts.batch,opts.probes-count);
-                if strcmp(opts.probe_dist,'rademacher')
-                    Z=2*(rand(nr,k)>=0.5)-1;
-                else
-                    Z=randn(nr,k);
-                end
-                X=R'\(R\Z);
-                if any(~isfinite(X(:))) || any(max(abs(L*X-Z),[],1)>1e-8*max(1,max(abs(Z),[],1)))
-                    info.reason='solve_failed'; break;
-                end
-                samples=X.*Z;
-                bm=mean(samples,2); bm2=sum((samples-bm).^2,2);
-                delta=bm-mu; total=count+k;
-                m2=m2+bm2+delta.^2*(count*k/total);
-                mu=mu+delta*(k/total); count=total;
-                info.probes=count;
-                [info.reason,info.max_rel_se]=ddsync.hutch_diagnostic(mu,m2,count,opts.min_probes,opts.rel_tol);
-                if opts.report_every_batch>0 && mod(bi,opts.report_every_batch)==0
-                    fprintf('    Hutch diag: %d/%d probes, max relative MC SE=%.3g (%s)\n',count,opts.probes,info.max_rel_se,info.reason);
-                end
-                if strcmp(info.reason,'converged'), break; end
+        valid=isfinite(w) & w>0;aa=a(valid);bb=b(valid);ww=w(valid);
+        W=sparse([aa;bb],[bb;aa],[ww;ww],n,n);L=spdiags(sum(W,2),0,n,n)-W;
+        L=L(free,free)+ridge*speye(nr);
+        try,R=chol(L,'lower');catch,R=[];end
+        if isempty(R)
+            reason='solve_failed';
+        elseif strcmp(mode,'exact')
+            diagonal=ddsync.selected_inverse_diagonal(L,R,1:nr,opts.batch);ok=isfinite(diagonal);
+            out(free(ok))=sigma*sqrt(diagonal(ok));methods(free(ok))={'exact'};
+            if ~all(ok),reason='exact_failed';end
+        else
+            sample=ddsync.hutch_samples(L,R,opts);
+            reason=sample.reason;probes=sample.probes;max_rel_se=sample.max_rel_se;
+            relative(free)=sample.rel_se;good=sample.converged;
+            out(free(good))=sigma*sqrt(sample.mu(good));methods(free(good))={'hutch'};
+            bad=find(~good);
+            [~,order]=sortrows([-sample.rel_se(bad),bad],[1,2]);bad=bad(order);
+            limit=opts.repair_max_nodes;
+            if strcmp(opts.fallback,'exact') && nr<=opts.exact_max_nred,limit=numel(bad);end
+            targets=bad(1:min(numel(bad),limit));attempted=numel(targets);
+            exact=ddsync.selected_inverse_diagonal(L,R,targets,opts.batch);
+            for j=1:numel(targets)
+                i=targets(j);
+                if isfinite(exact(j)),out(free(i))=sigma*sqrt(exact(j));methods{free(i)}='exact';repaired=repaired+1;end
             end
-            if strcmp(info.reason,'converged')
-                if ~isfinite(sigma), info.reason='invalid_noise_scale';
-                else, out(free)=sigma*sqrt(mu); end
+            if strcmp(opts.unconverged,'keep') && probes>=opts.min_probes
+                for j=1:numel(bad)
+                    i=bad(j);
+                    % Near-zero estimates with SE >= estimate are not retained.
+                    if strcmp(methods{free(i)},'unavailable') && isfinite(sample.mu(i)) && sample.mu(i)>0 && sample.rel_se(i)<1
+                        out(free(i))=sigma*sqrt(sample.mu(i));methods{free(i)}='hutch_unconverged';
+                    end
+                end
             end
-        catch
-            info.reason='solve_failed';
         end
     end
-    if ~strcmp(info.reason,'converged'), info.method=opts.fallback; end
+elseif strcmp(mode,'none')
+    methods(free)={'none'};
+else
+    fallback=mode;
 end
-if strcmp(info.method,'exact')
-    if nr>opts.exact_max_nred
-        info.method='graph_bound'; info.reason=[info.reason '+exact_size_limit'];
-    else
-        try
-            R=chol(L,'lower'); diagonal=zeros(nr,1);
-            for first=1:opts.batch:nr
-                last=min(first+opts.batch-1,nr); E=zeros(nr,last-first+1);
-                for j=1:size(E,2), E(first+j-1,j)=1; end
-                X=R'\(R\E);
-                assert(all(isfinite(X(:))) && max(abs(L*X-E),[],'all')<=1e-8,'Exact solve failed');
-                for j=1:size(E,2), diagonal(first+j-1)=X(first+j-1,j); end
-            end
-            assert(isfinite(sigma) && all(isfinite(diagonal) & diagonal>0),'Invalid variance');
-            out(free)=sigma*sqrt(diagonal);
-        catch
-            info.method='graph_bound'; info.reason=[info.reason '+exact_failed'];
-        end
+missing=strcmp(methods,'unavailable');
+if any(missing)
+    switch fallback
+        case 'graph_bound',proxy=ddsync.graph_bound_std(n,a,b,w,pin,sigma);
+        case 'pseudo_weight',proxy=pseudo_weight;
+        otherwise,degree=accumarray([a;b],1,[n,1]);proxy=sigma./sqrt(degree);
     end
+    out(missing)=proxy(missing);methods(missing)={fallback};
 end
-% Missing sigma can become a minimum-sigma constraint in downstream readers.
-if strcmp(opts.mode,'hutch') && ismember(info.method,{'nan','none'})
-    info.method='graph_bound'; info.reason=[info.reason '+legacy_nan_fallback'];
+if ~strcmp(mode,'none')
+    assert(all(isfinite(out) & out>=0 & isfinite(single(out))),'Uncertainty is outside the supported numeric range or the retained component is disconnected.');
+    assert(sigma==0 || all(out(free)>0 & single(out(free))>0),'Uncertainty underflow; check weight/noise scaling.');
 end
-if strcmp(info.method,'graph_bound')
-    out=ddsync.graph_bound_std(n,a,b,w,pin,sigma);
-elseif strcmp(info.method,'none')
-    out(:)=NaN; out(pin)=0;
-end
+kinds=unique(methods(free));method='hybrid';if numel(kinds)==1,method=kinds{1};end
+info=struct('method',method,'reason',reason,'probes',probes,'max_rel_se',max_rel_se, ...
+    'hutch_converged',sum(strcmp(methods,'hutch')),'exact_nodes',sum(strcmp(methods,'exact')), ...
+    'repaired_nodes',repaired,'repair_attempted',attempted,'unconverged_nodes',sum(strcmp(methods,'hutch_unconverged')), ...
+    'fallback_nodes',sum(ismember(methods,{'pseudo_degree','pseudo_weight','graph_bound'})), ...
+    'node_methods',{methods},'node_rel_se',relative);
 end

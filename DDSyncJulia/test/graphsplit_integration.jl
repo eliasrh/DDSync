@@ -34,21 +34,30 @@ function check_graphsplit(theta_dir,std_dir,fixture)
     end
 end
 
-@testset "DDSync failure fallback through GraphSplit" begin
+@testset "DDSync per-event fallback through GraphSplit" begin
     mktempdir() do root
-        for fallback in ("exact","graph_bound","nan")
+        for fallback in ("pseudo_degree","exact","graph_bound","nan")
             cfg=split_config(joinpath(root,fallback),mode="hutch")
             cfg[:std][:probes]=1 # deliberately cannot converge
-            cfg[:std][:exact_max_nred]=0 # force finite graph bound
+            cfg[:std][:exact_max_nred]=0
+            cfg[:std][:repair_max_nodes]=0 # force requested finite fallback
             cfg[:std][:fallback]=fallback
             Random.seed!(1234)
             redirect_stdout(devnull) do; DDSync.run(cfg); end
             check_graphsplit(cfg[:io][:thetadir],cfg[:io][:thetastd_dir],dirname(cfg[:io][:infile_dt]))
         end
+        cfg=split_config(joinpath(root,"kept"),mode="hutch")
+        cfg[:std][:probes]=128;cfg[:std][:repair_max_nodes]=0
+        Random.seed!(1234)
+        redirect_stdout(devnull) do; DDSync.run(cfg); end
+        @test occursin("hutch_unconverged",read(joinpath(cfg[:io][:thetastd_dir],"std_quality_TEST_P.txt"),String))
+        check_graphsplit(cfg[:io][:thetadir],cfg[:io][:thetastd_dir],dirname(cfg[:io][:infile_dt]))
     end
     if length(ARGS)>=2
-        root=joinpath(abspath(ARGS[2]),"bound")
-        fixture=joinpath(@__DIR__,"..","..","test","fixtures")
-        check_graphsplit(joinpath(root,"theta"),joinpath(root,"thetastd"),fixture)
+        for mode in ("bound","degree")
+            root=joinpath(abspath(ARGS[2]),mode)
+            fixture=joinpath(@__DIR__,"..","..","test","fixtures")
+            check_graphsplit(joinpath(root,"theta"),joinpath(root,"thetastd"),fixture)
+        end
     end
 end
