@@ -212,7 +212,11 @@ group    n_edges  n_kept  pruned_pct  robust_p50  robust_p05  robust_p95  frac_r
 
 The **requires-review share** is kept unconverged Hutch plus fallback. At 10% or more, the report advises increasing probes and/or exact repairs, or considering a larger full exact cap. Groups receive their own advice so a poorly estimated small group cannot disappear inside a good global average. This reporting threshold is an operational prompt, not a statistical confidence bound. A large exact-plus-converged share is favorable; it does not itself trigger advice to increase sampling.
 
-All scale values are in seconds. Component `sigma_hat` is the raw final robust residual-noise estimate. `sigma_std` is the scale actually used in uncertainty formulas after the optional `min_sigma` floor: normally `max(sigma_hat, min_sigma)` when the floor is enabled, otherwise `sigma_hat`. The `sigma` in the degree-proxy formula means **`sigma_std`**, not a separate noise estimate. Neither scale is a particular event's std or the Monte Carlo sampling error. The group-table `sigma_hat` is the median of raw final component scales; each component uses its own scale. `pseudo_weight` does not use either scale.
+All scale values are in seconds. After the final fit, DDSync compares each retained measured differential travel time with `theta_i - theta_j`. Component `sigma_hat` measures the scatter of these mismatches within one connected group at one station and phase; DDSync uses it to estimate noise in the pairwise measurements.
+
+`sigma_std` is the scale actually used in uncertainty formulas after the optional `min_sigma` floor: normally `max(sigma_hat, min_sigma)` when the floor is enabled, otherwise `sigma_hat`. The `sigma` in the degree-proxy formula means **`sigma_std`**, not a separate noise estimate. Neither scale is a particular event's std or the Monte Carlo sampling error.
+
+The group-table `sigma_hat` is the median of raw final component scales; each component uses its own scale. `pseudo_weight` does not use either scale.
 
 Component records begin with `# std_component` and continue on subsequent comment lines. They include successful methods as well as failures, both scale values, probes, the pre-repair diagnostic and method counts. `method=hybrid` means events used different methods. Use `std_quality_*.txt` to identify individual entries. Parsers should split the observation table on whitespace, and should not assume all component fields are on one line. See the [diagnostic field guide](../docs/uncertainty.md#reading-per-event-quality-and-component-diagnostics).
 
@@ -239,7 +243,9 @@ Set both values to `6` if you need the older text-file formatting. More printed 
 
 ## Residual scale floors: `min_scale` versus `min_sigma`
 
-DDSync has two separate safeguards. They intentionally do different jobs.
+For each retained pair, the fitted theta values predict a differential travel time `theta_i - theta_j`. The difference between this prediction and the measured differential travel time is the **residual**. DDSync measures the scatter of these residuals separately for each connected group at one station and phase. It uses that scatter as an estimate of noise in the pairwise measurements.
+
+The two settings below impose a minimum on the scatter used for different purposes.
 
 ### `robust.min_scale`
 
@@ -247,7 +253,9 @@ This protects pruning and IRLS. During outlier detection and Huber reweighting, 
 
 ### `std.min_sigma` and `std.apply_min_sigma`
 
-This applies only when converting the final residual-noise estimate into exported `std_theta` values for Hutchinson, exact, graph-bound and `pseudo_degree` modes.
+`min_sigma = 5e-4` means: **when calculating theta uncertainties, assume at least 0.5 ms scatter in the mismatches between measured and fitted differential travel times.** DDSync combines that assumed scatter with the number, weights and arrangement of observations (or just the degree for `pseudo_degree`) to calculate `std_theta`. It applies the same minimum for exact, Hutchinson, graph-bound and degree-proxy calculations.
+
+**This is not a minimum theta uncertainty.** Combining observations can give exported `std_theta` values smaller than `min_sigma`.
 
 ```toml
 [std]
@@ -255,14 +263,14 @@ min_sigma = 5e-4
 apply_min_sigma = true
 ```
 
-When `std.apply_min_sigma = true`, DDSync uses at least `std.min_sigma` as the residual-noise scale before computing exported `std_theta`. When `std.apply_min_sigma = false` or `std.min_sigma = 0`, this export floor is disabled.
+When `std.apply_min_sigma = true`, DDSync uses at least `std.min_sigma` for this mismatch scatter before computing exported `std_theta`. When `std.apply_min_sigma = false` or `std.min_sigma = 0`, this minimum assumed mismatch scatter is disabled.
 
-Example: suppose the final residual scale is `1e-5` seconds and `std.min_sigma = 5e-4`.
+Example: suppose the measured scatter of the final travel-time mismatches is `1e-5` seconds and `std.min_sigma = 5e-4`.
 
-- With `std.apply_min_sigma = true`, `std_theta` export uses `5e-4` seconds before graph leverage or degree scaling.
-- With `std.apply_min_sigma = false`, `std_theta` export uses `1e-5` seconds.
+- With `std.apply_min_sigma = true`, the mismatch scatter used in the formula is `5e-4` seconds. With `pseudo_degree` and degree 100, the resulting `std_theta` is `5e-5` seconds, below `min_sigma`.
+- With `std.apply_min_sigma = false`, the mismatch scatter used in the formula is `1e-5` seconds. With degree 100, the resulting degree-proxy `std_theta` is `1e-6` seconds.
 
-`min_sigma` does not floor every row in `std_theta_*.txt`. It floors the residual-noise scale before the graph/degree conversion. The final row values can be smaller or larger, and the pinned reference event remains `0`.
+`min_sigma` does not floor every row in `std_theta_*.txt`. It sets a minimum assumed scatter in the travel-time mismatches before converting that scatter into theta uncertainties. The final row values can be smaller or larger, and the pinned reference event remains `0`.
 
 `pseudo_weight` mode does not use `sigma_hat`, so `min_sigma` does not affect `pseudo_weight` standard deviations.
 
@@ -362,8 +370,8 @@ For `thetaStd`, DDSync uses `sqrt(std_theta_i^2 + std_theta_j^2)` and ignores co
 | `exact_max_nred` | `2048` | Full exact size cap in unpinned events. `auto` switches to Hutch above it; explicit exact mode above it uses fallback. |
 | `repair_max_nodes` | `128` | Maximum selected full-system exact corrections after Hutch, reusing its factorization. Applies independently of component size. |
 | `unconverged` | `"keep"` | Retain unrepaired positive estimates with enough samples and relative MC SE below 1, labeled `hutch_unconverged`. Use `fallback` to replace all failing entries instead. |
-| `min_sigma` | `5e-4` | Optional residual-noise floor used only for exported Hutchinson, exact, graph-bound and `pseudo_degree` `std_theta`. |
-| `apply_min_sigma` | `true` | Switch for `min_sigma`. Set false, or set `min_sigma` to `0`, to disable the export floor. |
+| `min_sigma` | `5e-4` | Minimum assumed scatter of measured differential travel times around fitted `theta_i - theta_j`, in seconds, when calculating uncertainty. **Not a minimum `std_theta`; exported values can be smaller.** |
+| `apply_min_sigma` | `true` | Switch for `min_sigma`. Set false, or set `min_sigma` to `0`, to disable this minimum assumed mismatch scatter. These options do not floor final theta uncertainties. |
 | `pseudo_weight_source` | `"combined"` | Edge weight source for `pseudo_weight` and `nodeWeight`: `"combined"`, `"robust"`, or `"base"`. |
 | `pseudo_weight_eps` | `1e-6` | Minimum node weight before inverting in `pseudo_weight` mode. Prevents division by zero. |
 | `thetastd_write_weightcol` | `true` | Add the practical `thetaWeight` column to `std_theta_*.txt`. |
@@ -416,7 +424,7 @@ thetastd_decimals = 12
 dt_decimals = 9  # also increase dt_sync precision if needed
 ```
 
-### Disable the exported `std_theta` residual-noise floor
+### Use the measured mismatch scatter without a minimum
 
 ```toml
 [std]

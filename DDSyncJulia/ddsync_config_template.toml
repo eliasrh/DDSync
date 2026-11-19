@@ -79,8 +79,14 @@ probe_dist = "rademacher"       # "rademacher" | "gaussian"
 batch = 128
 report_every_batch = 10
 max_nred = 40000
-min_sigma = 5e-4             # residual-noise floor for exported std_theta
-apply_min_sigma = true       # false (or min_sigma=0) disables the std_theta floor
+
+# After fitting, DDSync compares each retained measured differential travel time
+# with theta_i - theta_j. sigma_hat is the scatter of these mismatches, in seconds,
+# estimated separately for each connected group at one station and phase.
+# The uncertainty calculation uses sigma_std = max(sigma_hat, min_sigma) when enabled.
+# Combining observations can give std_theta below min_sigma; this is not a minimum std_theta.
+min_sigma = 5e-4             # use at least 0.5 ms for the scatter of these travel-time mismatches
+apply_min_sigma = true       # false (or min_sigma=0) uses sigma_hat without imposing this minimum
 # min_diag_rel = 1e-12        # deprecated and ignored; no clipping of failed variances
 
 # For pseudo_weight (and optional alt column): per-node weight estimated from incident edges.

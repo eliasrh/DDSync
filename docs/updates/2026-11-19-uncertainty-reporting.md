@@ -26,12 +26,12 @@ The retained-estimate guard is unchanged: a positive but unrepaired estimate is 
 
 ## What `sigma_hat` means
 
-All the following scales are in seconds:
+For each retained pair, DDSync compares the measured differential travel time with the fitted difference `theta_i - theta_j`. The mismatch is the residual. The scatter of these mismatches estimates noise in the pairwise measurements, separately for each connected group at one station and phase. All the following scales are in seconds:
 
 | Name | Meaning |
 | --- | --- |
-| Component `sigma_hat` | Raw final robust estimate of residual noise in that component. |
-| Component `sigma_std` | The residual scale used in the uncertainty formula after the optional `min_sigma` floor. |
+| Component `sigma_hat` | Measured scatter of the travel-time mismatches after the final fit in that component. |
+| Component `sigma_std` | Mismatch scatter used in the uncertainty formula, including the minimum `min_sigma` when enabled. |
 | Group-table `sigma_hat` | Median of raw final component scales within the station-phase group, for reporting only. |
 | `std_theta` | The resulting uncertainty for an individual theta value, after graph or degree scaling. |
 
@@ -65,3 +65,9 @@ Julia regression tests passed **1,370 assertions**, including 28 reporting check
 The reporting tests cover unequal component sizes, exact repairs counted once, all-converged output, empty and disabled uncertainty, the 10% advisory boundary, a poor group hidden by good overall coverage, aligned headers including long station names, and component records confined to the final section. An end-to-end mixed-method run checks reported percentages against the actual per-event quality files: 8 exact repairs and 28 degree proxies yield 22.22% exact and 77.78% requiring review across 36 non-reference entries.
 
 The historical November 12 study scripts explicitly retain their 2048-probe budgets so their published experiments remain reproducible. No new accuracy claim is inferred from the doubled default alone.
+
+## Configuration-comment correction
+
+The template previously described `apply_min_sigma` as enabling or disabling a “std_theta floor.” That wording was incorrect: both `min_sigma` and `apply_min_sigma` control the minimum assumed scatter of measured differential travel times around the fitted differences `theta_i - theta_j` when calculating uncertainty. They do not guarantee any minimum exported theta standard deviation. For example, if the measured scatter is `1e-5` seconds and the enabled minimum is `5e-4` seconds, the degree proxy at degree 100 is `5e-5` seconds.
+
+The Julia TOML, source-default comments, MATLAB configuration examples, metrics legend and current manuals now define these mismatches explicitly. Parameter names, values and numerical behavior are unchanged. Verification compared parsed TOML values and executable source text before and after the configuration-comment changes; the metrics changes affect only explanatory text. After this correction, all 1,370 Julia regression assertions and 23 targeted MATLAB reporting checks passed.

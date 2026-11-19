@@ -15,6 +15,8 @@ still requires users to prepare compact positive IDs before running.
 
 `sync_metrics.txt` now gives counts and percentages for exact, converged Hutch, kept unconverged Hutch, and fallback std values, globally and by station-phase group. It advises further sampling or exact repairs when at least 10% require review. Observation columns are aligned, and component details are grouped at the end. The default maximum probe budget is now **4096**; explicit older settings remain in effect.
 
+**Configuration wording corrected:** `min_sigma` sets the minimum assumed scatter of measured differential travel times around the fitted differences `theta_i - theta_j` when calculating uncertainties. It does not impose a minimum exported `std_theta`; the previous comments incorrectly called this a “std_theta floor.” The calculation and parameter values are unchanged.
+
 The report also distinguishes raw residual scale `sigma_hat` from the optionally floored `sigma_std` used in uncertainty formulas. Read the [reporting update](docs/updates/2026-11-19-uncertainty-reporting.md) and [uncertainty guide](docs/uncertainty.md).
 
 ## Update (12 November 2026): preserve useful Hutchinson estimates
@@ -132,17 +134,17 @@ The MATLAB folder includes example `dt.cc` and `catalog.txt` from the Spanish Sp
 
 ## Shared `min_scale` versus `min_sigma` behavior
 
-DDSync has two separate small-scale safeguards. They are deliberately separate.
+A residual is the mismatch between a fitted difference `theta_i - theta_j` and its measured differential travel time. DDSync measures the scatter of these mismatches separately for each connected group at one station and phase. It uses this scatter to estimate noise in the pairwise measurements. Two settings impose a minimum on the scatter used for different purposes.
 
 `robust.min_scale` is used during robust pruning and Huber IRLS. It prevents divide-by-zero behavior when residuals are exactly zero or nearly zero. It can affect which edges are pruned and how robust weights are computed.
 
-`std.min_sigma` is used only when exporting `std_theta`, and only when `std.apply_min_sigma = true`. It floors the final residual-noise scale before Hutchinson, exact or `pseudo_degree` standard deviations are written.
+**`std.min_sigma = 5e-4` means assuming at least 0.5 ms scatter in these travel-time mismatches when calculating uncertainty.** With `std.apply_min_sigma = true`, DDSync uses the larger of the measured scatter and this minimum in Hutchinson, exact, graph-bound and `pseudo_degree` calculations. Combining observations can give `std_theta` smaller than `min_sigma`; it is not a minimum theta uncertainty.
 
-Disabling `std.apply_min_sigma` disables the exported `std_theta` residual-noise floor. It does not disable the robust pruning/IRLS floor.
+Disabling `std.apply_min_sigma` uses the measured scatter without imposing this minimum. It does not disable the robust pruning/IRLS floor.
 
-`min_sigma` does not say that every row in `std_theta_*.txt` must be at least `min_sigma`. It floors the residual-noise estimate before graph leverage or degree scaling. Individual rows can be smaller or larger, and the pinned reference event remains `0`.
+Individual values in `std_theta_*.txt` depend on the number, weights and arrangement of retained observations (or just degree for `pseudo_degree`). They can be smaller or larger than `min_sigma`; the pinned reference event remains `0`.
 
-`sigma_hat` is the raw component residual-noise estimate; `sigma_std` is its optionally floored value used in the uncertainty formulas. The group-table `sigma_hat` is only a reporting median across components.
+`sigma_hat` is the measured mismatch scatter; `sigma_std` is the scatter actually used in the uncertainty formulas, including the minimum when enabled. The group-table `sigma_hat` is only a reporting median across components.
 
 `pseudo_weight` mode does not use `sigma_hat` or `sigma_std`, so `min_sigma` does not affect `pseudo_weight` standard deviations.
 

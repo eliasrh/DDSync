@@ -10,18 +10,28 @@ Subtract theta values only within the same station-phase file and reference ID. 
 
 ## What is being estimated
 
-Let `Lred` be the weighted graph Laplacian after removing the reference row and column and adding the numerical ridge. The conditional model is
+For each retained event pair, DDSync compares the measured differential travel time `dt_ij` with the difference predicted by the fitted theta values. The **residual** is the mismatch:
+
+```text
+r_ij = (theta_i - theta_j) - dt_ij
+```
+
+`sigma_hat` measures how widely these mismatches vary after the final fit, in seconds. DDSync estimates it separately for each connected group at one station and phase and uses it as an estimate of noise in the pairwise measurements. Specifically, it uses 1.4826 times the median absolute deviation from the median residual, using observations whose final positive weight is at least half the median positive weight. If that estimate is zero or nonfinite, it uses the ordinary sample standard deviation of residuals with positive weights.
+
+**`min_sigma = 5e-4` means assuming at least 0.5 ms scatter in these travel-time mismatches when calculating uncertainty.** `sigma_std` is the scatter actually used:
+
+```text
+sigma_std = max(sigma_hat, min_sigma)   # when apply_min_sigma=true and min_sigma>0
+sigma_std = sigma_hat                   # otherwise
+```
+
+DDSync then combines this scatter with the weights and arrangement of retained observations to calculate each theta uncertainty. Let `Lred` be the weighted graph Laplacian after removing the reference row and column and adding the numerical ridge. The conditional model is
 
 ```text
 std_theta = sigma_std * sqrt(diag(inv(Lred)))
 ```
 
-`sigma_hat` is the component's **raw final robust residual-noise estimate**, in seconds. `sigma_std` is the scale used in the uncertainty calculation after the optional `min_sigma` floor:
-
-```text
-sigma_std = max(sigma_hat, min_sigma)   # when the positive floor is enabled
-sigma_std = sigma_hat                   # when the floor is disabled
-```
+**These settings do not impose a minimum `std_theta`.** Combining observations can give smaller theta uncertainties. For example, if the measured mismatch scatter is `1e-5` seconds and the minimum is enabled at `5e-4` seconds, then `sigma_std = 5e-4` seconds. The degree proxy at degree 100 gives `std_theta = 5e-4 / sqrt(100) = 5e-5` seconds. This distinction also applies to exact and Hutchinson calculations, not just fallbacks. The earlier template wording “std_theta floor” was incorrect.
 
 The shorter `sigma` used in descriptions such as `sigma / sqrt(degree)` means `sigma_std`; it is not a different fitted noise parameter. Neither value is an event's standard deviation or the standard error of Hutchinson sampling. The report lists both scales per component. In the observation table, `sigma_hat` is the median of the raw component scales in that station-phase group, solely for reporting. Each component still uses its own scale. The `pseudo_weight` formula does not use either scale.
 
@@ -137,7 +147,7 @@ The observation table uses aligned whitespace-separated columns. Component detai
 | `method` | Actual method, or `hybrid` when different events use different methods. |
 | `reason` | Sampling outcome (`converged`, `not_converged`, `nonpositive_estimate`, `nonfinite_estimate`, `insufficient_probes`, `solve_failed`), a skip reason (`disabled_probes`, `size_limit`, `exact_size_limit`), `exact_failed`, or `requested`. It describes the attempt, before repairs. |
 | `probes`, `max_rel_se` | Actual sampling count and worst pre-repair relative MC standard error. |
-| `sigma_hat`, `sigma_std` | Raw residual-noise scale and the optionally floored scale used in uncertainty formulas, both in seconds. |
+| `sigma_hat`, `sigma_std` | Measured scatter of fitted-minus-observed differential travel times, and the scatter used in uncertainty formulas after applying the optional minimum, both in seconds. |
 | `hutch_converged` | Number of preserved converged stochastic entries. |
 | `exact_nodes` | Number supplied by full or selected exact calculation. |
 | `repair_attempted`, `repaired_nodes` | Selected solves attempted and successfully used. |
@@ -156,6 +166,6 @@ For reproducibility, use Julia's `Random.seed!(1234)` before `DDSync.run(cfg)`, 
 
 Estimator failure does not deliberately export missing std for accepted theta rows. Defaults preserve finite uncertainties and reference constraints for GraphSplit. Invalid noise scales, underflow/overflow or otherwise unusable fallback values stop the run explicitly. Explicit `mode="none"` or `export=false` remains a theta-only workflow; avoid those choices when downstream uncertainty is required. Rejected/isolated events still have missing theta/reference and must be skipped. A downstream maximum-sigma filter can still remove constraints.
 
-`robust.min_scale` stabilizes pruning/Huber weights. `std.min_sigma` floors the residual-noise scale when enabled, not each row's final std. Disabling this floor permits zero std for exactly consistent synthetic data. Output precision controls decimal formatting only; temporary data and pass-2 storage use single precision. Additional printed decimals do not establish equivalent physical accuracy.
+`robust.min_scale` stabilizes pruning/Huber weights. `std.min_sigma` sets the minimum assumed scatter in the travel-time mismatches when calculating uncertainty, not each row's final std. Disabling this floor permits zero std for exactly consistent synthetic data. Output precision controls decimal formatting only; temporary data and pass-2 storage use single precision. Additional printed decimals do not establish equivalent physical accuracy.
 
 Rerun affected datasets to benefit from per-event handling. Old std files cannot reveal which Hutch estimates had converged before a whole-component fallback replaced them.

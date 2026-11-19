@@ -3,8 +3,9 @@ function write_metrics_report(fid,groups,components,overall)
 summary=ddsync.uncertainty_summary(components);
 group_summaries=summarize_groups(groups,components);
 fprintf(fid,'\n');ddsync.write_uncertainty_summary(fid,summary);
-fprintf(fid,'# sigma_hat: raw final residual-noise scale in seconds; each group reports the median of component scales.\n');
-fprintf(fid,'# sigma_std: component sigma_hat after the optional min_sigma floor; this is sigma in the std formulas.\n');
+fprintf(fid,'# Timing mismatch = fitted (theta_i - theta_j) minus measured differential travel time, for kept pairs.\n');
+fprintf(fid,'# sigma_hat: robust scatter of these mismatches per component (seconds); group entries report the median across components.\n');
+fprintf(fid,'# sigma_std = max(sigma_hat, min_sigma) when the minimum is enabled, otherwise sigma_hat; this is sigma in std formulas.\n');
 fprintf(fid,'# Neither scale is a theta std or a Monte Carlo error. pseudo_weight does not use sigma_std.\n');
 fprintf(fid,'\n# STATION-PHASE OBSERVATIONS\n');
 width=16;

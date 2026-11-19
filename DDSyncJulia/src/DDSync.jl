@@ -96,8 +96,10 @@ function config_default()
         :batch                            => 128,
         :report_every_batch               => 10,
         :max_nred                         => 40000,
-        :min_sigma                        => 5e-4,
-        :apply_min_sigma                  => true,
+        # sigma_hat measures scatter of (theta_i - theta_j) - measured_dt_ij after fitting.
+        # It is estimated separately for each connected station-phase component.
+        :min_sigma                        => 5e-4,           # minimum assumed mismatch scatter (s), not minimum std_theta
+        :apply_min_sigma                  => true,           # use max(sigma_hat, min_sigma); false uses sigma_hat
         :min_diag_rel                     => 1e-12,          # deprecated; ignored (no variance clipping)
         :pseudo_weight_source             => "combined",      # "base" | "robust" | "combined"
         :pseudo_weight_eps                => 1e-6,

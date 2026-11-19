@@ -95,8 +95,13 @@ cfg.std.hutch.batch             = 128;
 cfg.std.hutch.report_every_batch= 10;
 
 cfg.std.hutch.max_nred          = 40000;     % skip Hutch if reduced system larger than this
-cfg.std.min_sigma               = 5e-4;      % floor on residual noise estimate when converting to std_theta
-cfg.std.apply_min_sigma         = true;      % false (or min_sigma=[]/0) disables exported std_theta floor
+% After fitting, compare retained measured differential travel times with theta_i - theta_j.
+% sigma_hat is the scatter of these mismatches, in seconds, estimated separately
+% for each connected group at one station and phase.
+% When enabled, use sigma_std = max(sigma_hat, min_sigma) to calculate uncertainty.
+% Combining observations can give std_theta below min_sigma; this is not a minimum std_theta.
+cfg.std.min_sigma               = 5e-4;      % use at least 0.5 ms for this travel-time mismatch scatter
+cfg.std.apply_min_sigma         = true;      % false (or min_sigma=[]/0) uses sigma_hat without this minimum
 cfg.std.hutch.min_diagrel       = 1e-12;     % deprecated, ignored; failed estimates are never clipped
 
 end

@@ -31,8 +31,12 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % cfg.std.exact_max_nred = 2048;
 % cfg.std.repair_max_nodes = 128; % selected full-system exact corrections
 % cfg.std.unconverged = 'keep'; % retain positive estimates with relative MC SE < 1; otherwise fallback
-% cfg.std.min_sigma = 5e-4;       % residual-noise floor for exported std_theta
-% cfg.std.apply_min_sigma = true; % set false (or min_sigma=[]/0) to disable
+% sigma_hat measures the scatter of retained measured differential travel times
+% around theta_i - theta_j after fitting, separately for each connected station/phase group.
+% Use at least min_sigma for this scatter when calculating theta uncertainties.
+% Combining observations can give std_theta below min_sigma; this is not a minimum std_theta.
+% cfg.std.min_sigma = 5e-4;       % minimum assumed travel-time mismatch scatter (seconds)
+% cfg.std.apply_min_sigma = true; % false (or min_sigma=[]/0) uses sigma_hat without this minimum
 
 % Optional: dt_sync weight mode
 % cfg.output.dt_weight_mode = 'thetaStd'; % 'base'|'robust'|'combined'|'thetaStd'
