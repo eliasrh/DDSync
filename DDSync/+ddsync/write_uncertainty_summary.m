@@ -20,9 +20,10 @@ fprintf(fid,'%safter selected repairs these entries use fallback. They are inclu
 if summary.total==0
     fprintf(fid,'%sNo assessed std entries; percentages are N/A. Enable uncertainty if required by the application.\n',prefix);
 elseif summary.advise
-    fprintf(fid,'%sADVICE: At least 10%% require review. Increase std.hutch.probes and/or std.repair_max_nodes;\n',prefix);
-    fprintf(fid,'%s        consider std.exact_max_nred for affordable full exact calculation. Inspect std_quality_*.txt.\n',prefix);
-    fprintf(fid,'%s        For skipped/failed solves, inspect the reason; for explicit proxies, select exact or a sampling mode first.\n',prefix);
+    fprintf(fid,'%sADVICE: At least 10%% require review. Check the categories above and std_quality_*.txt.\n',prefix);
+    fprintf(fid,'%s        If many Hutch estimates miss the target, try Cholesky before increasing the number of probes.\n',prefix);
+    fprintf(fid,'%s        Set cfg.std.auto_probe = ''cholesky'' in auto mode, or change explicit hutch mode to cfg.std.mode = ''cholesky''.\n',prefix);
+    fprintf(fid,'%s        For a few unresolved entries, consider raising cfg.std.repair_max_nodes. For fallbacks, check the component reason.\n',prefix);
 else
     fprintf(fid,'%sBelow the 10%% review advisory threshold. Inspect flagged entries and group summaries before weighting.\n',prefix);
 end

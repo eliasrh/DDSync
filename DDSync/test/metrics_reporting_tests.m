@@ -12,6 +12,7 @@ text=evalc('ddsync.write_uncertainty_summary(1,s,'''');');
 check(contains(text,'Exact (including repairs)') && contains(text,'Converged Hutch') && contains(text,'Kept unconverged Hutch') && contains(text,'Fallback / proxy'));
 check(contains(text,'relative MC SE >= 1') && contains(text,'included in the fallback/proxy counts'));
 check(contains(text,'70.00%') && contains(text,'20.00%') && contains(text,'5.00%') && contains(text,'ADVICE:'));
+check(contains(text,'try Cholesky before increasing'));
 justbelow=base;justbelow.exact_nodes=71;justbelow.fallback_nodes=4;
 s=ddsync.uncertainty_summary(justbelow);check(~s.advise);
 allgood=base;allgood.nodes=91;allgood.exact_nodes=0;allgood.hutch_converged=90;allgood.unconverged_nodes=0;allgood.fallback_nodes=0;
@@ -36,6 +37,7 @@ check(strfind(text,'# UNCERTAINTY SUMMARY')<strfind(text,'# STATION-PHASE OBSERV
 check(strfind(text,'# UNCERTAINTY BY GROUP')<strfind(text,'# COMPONENT DETAILS'));
 check(strfind(text,'# COMPONENT DETAILS')<strfind(text,'# std_component'));
 check(contains(text,'# GROUP ADVICE:') && contains(text,'#   VERY_LONG_STATION_NAME_PHASE_S'));
+check(contains(text,'try Cholesky before increasing'));
 check(~contains(text,'# ADVICE:')); % low global percentage does not hide the bad group
 check(contains(text,'sigma_hat=1e-05 sigma_std=0.0005'));
 header=find(startsWith(lines,'group'),1);h=char(lines{header});r=char(lines{header+1});

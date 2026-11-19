@@ -419,7 +419,7 @@ function run(cfg::Dict{Symbol,Any}=config_default())
     for g in metrics_rows
         c=get(by_group,g.group,uncertaintyCounts(()))
         if needsStdReview(c)
-            @printf("[STD GROUP ADVICE] %s: %s require review; increase probes/repairs as appropriate. See %s.\n",
+            @printf("[STD GROUP ADVICE] %s: %s require review. See the group recommendations in %s.\n",
                 g.group,stdPercent(c.review,c.total),metrics_file)
         end
     end

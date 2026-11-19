@@ -13,7 +13,9 @@ still requires users to prepare compact positive IDs before running.
 
 ## Update · 19 November 2026 — Cholesky timing uncertainties
 
-Events can shift together relative to their timing reference. DDSync can now calculate that shared contribution directly and use squared random draws to estimate the rest. In Julia or MATLAB, use `mode = "auto"` with `auto_probe = "cholesky"` to try it on larger groups. It first checks after 256 draws with the default settings. The report shows how many event uncertainties met the target, how many were kept despite exceeding it, and how many used a fallback. Hutchinson remains the default sampler.
+**If many Hutch estimates miss the sampling target, try Cholesky before increasing the number of probes.**
+
+Events can shift together relative to their timing reference. Cholesky calculates the contribution from one shared shift directly and estimates the rest with squared random draws. In automatic mode, set `auto_probe = "cholesky"` to use it on larger groups. If you explicitly set `mode = "hutch"`, change it to `mode = "cholesky"`. With the default settings, Cholesky first checks after 256 draws. The report shows how many estimates met the target, how many were kept despite exceeding it, and how many used a fallback. Hutchinson remains the default sampler.
 
 Read [how to enable Cholesky sampling and interpret the results](docs/updates/2026-11-19-cholesky-uncertainties.md).
 

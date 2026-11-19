@@ -36,8 +36,9 @@ for k=1:numel(groups)
 end
 if ~isempty(flagged)
     fprintf(fid,'# GROUP ADVICE: At least 10%% require review in each group below, even if the overall share is small.\n');
-    fprintf(fid,'# Increase std.hutch.probes and/or std.repair_max_nodes, or std.exact_max_nred where affordable;\n');
-    fprintf(fid,'# inspect skip/solve reasons and explicit proxy settings before rerunning.\n');
+    fprintf(fid,'# If many Hutch estimates miss the target, try Cholesky before increasing the number of probes.\n');
+    fprintf(fid,'# Set cfg.std.auto_probe = ''cholesky'' in auto mode, or change explicit hutch mode to cfg.std.mode = ''cholesky''.\n');
+    fprintf(fid,'# Check the component reason for fallback entries.\n');
     for k=1:numel(flagged),fprintf(fid,'#   %s\n',flagged{k});end
 end
 fprintf(fid,'\n# COMPONENT DETAILS (all methods, including both sampling methods)\n');

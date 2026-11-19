@@ -29,6 +29,7 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % cfg.std.mode = 'pseudo_degree';
 
 % Default uncertainty policy (customize these only when needed):
+% If many Hutch estimates miss the target, try Cholesky before increasing probes.
 % cfg.std.auto_probe = 'cholesky'; % Optional. Use squared draws on larger groups. Default is 'hutch'.
 % cfg.std.mode = 'auto'; % exact for small components, otherwise the sampler in auto_probe
 % cfg.std.fallback = 'pseudo_degree'; % only unresolved entries; graph_bound is opt-in

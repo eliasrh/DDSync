@@ -26,6 +26,7 @@
     @test findfirst("# UNCERTAINTY SUMMARY",report)<findfirst("# STATION-PHASE OBSERVATIONS",report)<findfirst("# COMPONENT DETAILS",report)
     @test !occursin("# std_component",first(split(report,"# COMPONENT DETAILS")))
     @test occursin("# GROUP ADVICE",report) && occursin("#   BAD_S",report)
+    @test occursin("try Cholesky before increasing",report)
     @test !occursin("# ADVICE:",report) # overall does not hide per-group warning
     @test occursin("relative mc se >= 1",lowercase(report))
     @test occursin("sigma_hat=1e-05 sigma_std=0.0005",report)
@@ -44,6 +45,8 @@
     out=sprint(io->DDSync.writeUncertaintySummary(io,all_good;prefix=""))
     @test occursin("Converged Hutch",out) && occursin("100.00%",out)
     @test !occursin("ADVICE:",out)
+    flagged_summary=sprint(io->DDSync.writeUncertaintySummary(io,comps[2:2]))
+    @test occursin("try Cholesky before increasing",flagged_summary)
     @test DDSync.config_default()[:std][:probes]==4096
     # End-to-end accounting against actual quality-file rows and scale floor.
     mktempdir() do root

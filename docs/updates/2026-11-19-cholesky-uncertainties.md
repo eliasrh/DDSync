@@ -28,6 +28,8 @@ In `sync_metrics.txt`, look at the counts for **Converged Cholesky**, **Kept unc
 
 ## Which method fits the problem?
 
+If many Hutch estimates miss the target in a station-phase group, try Cholesky before increasing the number of probes. In automatic mode, change `auto_probe` to `"cholesky"` so small groups still use exact variances. If you selected `mode = "hutch"` explicitly, change `mode` to `"cholesky"`. Keep the probe limit and `rel_tol` the same on the first comparison and check how many estimates meet the target in that group.
+
 Small groups can use exact variances. Cholesky draws can save many probes when events share a strong timing shift. Hutchinson can be excellent when timing errors are nearly independent. In particular, with a diagonal system its random-sign estimate is exact. More probes help sampling precision but do not make a sparse factorization fit in memory.
 
 Both samplers currently factor the same sparse matrix. The arrangement of connections determines how much memory that requires. Lowering `batch` reduces the number of random vectors held at once. `max_nred` limits the number of non-reference events per component that DDSync will sample. Components over the limit follow the configured fallback policy and show `reason=size_limit` in the report. A memory limit imposed by the operating system can stop the process before DDSync writes a report.

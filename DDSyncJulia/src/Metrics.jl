@@ -51,9 +51,10 @@ function writeUncertaintySummary(io, components; prefix="# ")
     if c.total == 0
         println(io,prefix,"No assessed std entries; percentages are N/A. Enable uncertainty if required by the application.")
     elseif needsStdReview(c)
-        println(io,prefix,"ADVICE: At least 10% require review. Increase std.probes and/or std.repair_max_nodes;")
-        println(io,prefix,"        consider std.exact_max_nred for affordable full exact calculation. Inspect std_quality_*.txt.")
-        println(io,prefix,"        For skipped/failed solves, inspect the reason; for explicit proxies, select exact or a sampling mode first.")
+        println(io,prefix,"ADVICE: At least 10% require review. Check the categories above and std_quality_*.txt.")
+        println(io,prefix,"        If many Hutch estimates miss the target, try Cholesky before increasing the number of probes.")
+        println(io,prefix,"        Under [std], set auto_probe = \"cholesky\" in auto mode, or change explicit hutch mode to mode = \"cholesky\".")
+        println(io,prefix,"        For a few unresolved entries, consider raising std.repair_max_nodes. For fallbacks, check the component reason.")
     else
         println(io,prefix,"Below the 10% review advisory threshold. Inspect flagged entries and group summaries before weighting.")
     end
@@ -95,8 +96,9 @@ function writeMetricsReport(io, groups, components, overall)
     flagged = [g.group for g in groups if needsStdReview(get(by_group,g.group,empty_counts))]
     if !isempty(flagged)
         println(io,"# GROUP ADVICE: At least 10% require review in each group below, even if the overall share is small.")
-        println(io,"# Increase std.probes and/or std.repair_max_nodes, or std.exact_max_nred where affordable;")
-        println(io,"# inspect skip/solve reasons and explicit proxy settings before rerunning.")
+        println(io,"# If many Hutch estimates miss the target, try Cholesky before increasing the number of probes.")
+        println(io,"# Under [std], set auto_probe = \"cholesky\" in auto mode, or change explicit hutch mode to mode = \"cholesky\".")
+        println(io,"# Check the component reason for fallback entries.")
         for group in flagged;println(io,"#   ",group);end
     end
     println(io,"\n# COMPONENT DETAILS (all uncertainty methods)")

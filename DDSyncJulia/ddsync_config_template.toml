@@ -59,6 +59,7 @@
 export = true
 # Each connected group is timed relative to one reference event.
 mode = "auto"                 # Calculate small groups exactly. Sample larger groups.
+# If many Hutch estimates miss the target, try Cholesky before increasing probes.
 auto_probe = "hutch"          # Change to "cholesky" to use squared draws for larger groups.
 exact_max_nred = 2048         # Largest number of non-reference events for a fully exact calculation.
 # Set mode to "hutch" or "cholesky" to sample even small groups.
