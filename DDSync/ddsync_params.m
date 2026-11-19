@@ -22,16 +22,19 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 
 % Optional: a fast weighting proxy (not a statistical uncertainty)
 % cfg.std.mode = 'pseudo_degree';
-% Defaults: exact for small components, otherwise per-event Hutch and repair.
+% Defaults: exact for small components, otherwise the selected sampler and repair.
+% cfg.std.auto_probe = 'cholesky'; % Optional. Use squared draws on larger groups. Default is 'hutch'.
 % cfg.std.mode = 'auto';
 % cfg.std.exact_max_nred = 2048;
 % cfg.std.repair_max_nodes = 128;
 % cfg.std.unconverged = 'keep'; % retain positive unresolved estimates with relative MC SE < 1
 % cfg.std.fallback = 'pseudo_degree'; % practical proxy, not calibrated uncertainty
-% cfg.std.hutch.probes = 4096;
+% Both samplers use these settings. Cholesky checks after 256 draws, then doubles
+% up to the maximum if any event still exceeds the sampling target.
+% cfg.std.hutch.probes = 4096; % Maximum draws per connected group.
 % cfg.std.hutch.min_probes = 128;
 % cfg.std.hutch.rel_tol = 0.10;
-% Read the four-category percentages and review advice in sync_metrics.txt.
+% Read the method percentages and review advice in sync_metrics.txt.
 % Unrepaired relative MC SE >= 1 uses fallback and contributes to the review share.
 % Component details are at the end; std_quality_*.txt identifies individual rows.
 % See ../docs/uncertainty.md for probe selection and fallback behavior.

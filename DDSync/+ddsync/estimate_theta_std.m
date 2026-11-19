@@ -3,25 +3,26 @@ function [out,info] = estimate_theta_std(n,a,b,w,pin,free,ridge,sigma,opts,pseud
 if nargin<10,pseudo_weight=NaN(n,1);end
 if ~isfield(opts,'repair_max_nodes'),opts.repair_max_nodes=128;end
 if ~isfield(opts,'unconverged'),opts.unconverged='keep';end
+if ~isfield(opts,'auto_probe'),opts.auto_probe='hutch';end
 free=free(:);nr=numel(free);out=NaN(n,1);out(pin)=0;
 methods=repmat({'unavailable'},n,1);methods{pin}='reference';relative=NaN(n,1);
 reason='requested';probes=0;max_rel_se=NaN;repaired=0;attempted=0;mode=opts.mode;
 if strcmp(mode,'auto')
-    if nr<=opts.exact_max_nred,mode='exact';else,mode='hutch';end
+    if nr<=opts.exact_max_nred,mode='exact';else,mode=opts.auto_probe;end
 end
 if ~strcmp(mode,'none')
     assert(isfinite(sigma) && sigma>=0,'Uncertainty needs a finite nonnegative noise scale; inspect residuals and std.min_sigma.');
 end
 fallback=opts.fallback;
 if ismember(fallback,{'exact','nan','none'}),fallback='pseudo_degree';end
-if strcmp(mode,'hutch') && (opts.probes<=0 || nr>opts.max_nred) && strcmp(opts.fallback,'exact') && nr<=opts.exact_max_nred
+if ismember(mode,{'hutch','cholesky'}) && (opts.probes<=0 || nr>opts.max_nred) && strcmp(opts.fallback,'exact') && nr<=opts.exact_max_nred
     if opts.probes<=0,reason='disabled_probes';else,reason='size_limit';end
     mode='exact';
 end
-if ismember(mode,{'exact','hutch'})
+if ismember(mode,{'exact','hutch','cholesky'})
     if strcmp(mode,'exact') && nr>opts.exact_max_nred
         reason='exact_size_limit';
-    elseif strcmp(mode,'hutch') && (opts.probes<=0 || nr>opts.max_nred)
+    elseif ismember(mode,{'hutch','cholesky'}) && (opts.probes<=0 || nr>opts.max_nred)
         if opts.probes<=0,reason='disabled_probes';else,reason='size_limit';end
     else
         valid=isfinite(w) & w>0;aa=a(valid);bb=b(valid);ww=w(valid);
@@ -35,10 +36,14 @@ if ismember(mode,{'exact','hutch'})
             out(free(ok))=sigma*sqrt(diagonal(ok));methods(free(ok))={'exact'};
             if ~all(ok),reason='exact_failed';end
         else
-            sample=ddsync.hutch_samples(L,R,opts);
+            if strcmp(mode,'cholesky')
+                sample=ddsync.cholesky_samples(L,R,opts);
+            else
+                sample=ddsync.hutch_samples(L,R,opts);
+            end
             reason=sample.reason;probes=sample.probes;max_rel_se=sample.max_rel_se;
             relative(free)=sample.rel_se;good=sample.converged;
-            out(free(good))=sigma*sqrt(sample.mu(good));methods(free(good))={'hutch'};
+            out(free(good))=sigma*sqrt(sample.mu(good));methods(free(good))={mode};
             bad=find(~good);
             [~,order]=sortrows([-sample.rel_se(bad),bad],[1,2]);bad=bad(order);
             limit=opts.repair_max_nodes;
@@ -54,7 +59,7 @@ if ismember(mode,{'exact','hutch'})
                     i=bad(j);
                     % Near-zero estimates with SE >= estimate are not retained.
                     if strcmp(methods{free(i)},'unavailable') && isfinite(sample.mu(i)) && sample.mu(i)>0 && sample.rel_se(i)<1
-                        out(free(i))=sigma*sqrt(sample.mu(i));methods{free(i)}='hutch_unconverged';
+                        out(free(i))=sigma*sqrt(sample.mu(i));methods{free(i)}=[mode '_unconverged'];
                     end
                 end
             end
@@ -81,7 +86,8 @@ end
 kinds=unique(methods(free));method='hybrid';if numel(kinds)==1,method=kinds{1};end
 info=struct('method',method,'reason',reason,'probes',probes,'max_rel_se',max_rel_se, ...
     'hutch_converged',sum(strcmp(methods,'hutch')),'exact_nodes',sum(strcmp(methods,'exact')), ...
-    'repaired_nodes',repaired,'repair_attempted',attempted,'unconverged_nodes',sum(strcmp(methods,'hutch_unconverged')), ...
+    'cholesky_converged',sum(strcmp(methods,'cholesky')),'cholesky_unconverged',sum(strcmp(methods,'cholesky_unconverged')), ...
+    'repaired_nodes',repaired,'repair_attempted',attempted,'unconverged_nodes',sum(ismember(methods,{'hutch_unconverged','cholesky_unconverged'})), ...
     'fallback_nodes',sum(ismember(methods,{'pseudo_degree','pseudo_weight','graph_bound'})), ...
     'node_methods',{methods},'node_rel_se',relative);
 end

@@ -3,17 +3,19 @@
 const STD_REVIEW_THRESHOLD_PCT = 10.0
 
 function uncertaintyCounts(components)
-    exact = hutch = unconverged = fallback = disabled = 0
+    exact = hutch = cholesky = unconverged = cholesky_kept = fallback = disabled = 0
     for c in components
         exact += c.exact_nodes
         hutch += c.hutch_converged
+        cholesky += get(c, :cholesky_converged, 0)
+        cholesky_kept += get(c, :cholesky_unconverged, 0)
         unconverged += c.unconverged_nodes
         fallback += c.fallback_nodes
         c.method in ("none", "disabled") && (disabled += c.nodes - 1)
     end
-    total = exact + hutch + unconverged + fallback
+    total = exact + hutch + cholesky + unconverged + fallback
     review = unconverged + fallback
-    return (exact=exact, hutch=hutch, unconverged=unconverged, fallback=fallback,
+    return (exact=exact, hutch=hutch, cholesky=cholesky, unconverged=unconverged, cholesky_kept=cholesky_kept, fallback=fallback,
         total=total, review=review, disabled=disabled, references=length(components))
 end
 
@@ -37,22 +39,23 @@ function writeUncertaintySummary(io, components; prefix="# ")
     println(io,prefix,"Excluded: ",c.references," gauge references; ",c.disabled," disabled entries; rejected/absent events.")
     @printf(io,"%s%-30s %12s %12s\n",prefix,"Category","Count","Percent")
     for (label,n) in (("Exact (including repairs)",c.exact),("Converged Hutch",c.hutch),
-                      ("Kept unconverged Hutch",c.unconverged),("Fallback / proxy",c.fallback))
+                      ("Kept unconverged Hutch",c.unconverged-c.cholesky_kept),
+                      ("Converged Cholesky",c.cholesky),("Kept unconverged Cholesky",c.cholesky_kept),("Fallback / proxy",c.fallback))
         @printf(io,"%s%-30s %12d %12s\n",prefix,label,n,stdPercent(n,c.total))
     end
     println(io,prefix,"Requires review (kept unconverged + fallback/proxy): ",stdCountPercent(c.review,c.total))
-    println(io,prefix,"Numerically checked (exact + converged Hutch): ",stdCountPercent(c.exact+c.hutch,c.total))
+    println(io,prefix,"Numerically checked (exact + converged estimates): ",stdCountPercent(c.exact+c.hutch+c.cholesky,c.total))
     println(io,prefix,"Fallback/proxy includes explicitly requested proxies/bounds. Checked does not mean physically calibrated.")
     if c.total == 0
         println(io,prefix,"No assessed std entries; percentages are N/A. Enable uncertainty if required by the application.")
     elseif needsStdReview(c)
         println(io,prefix,"ADVICE: At least 10% require review. Increase std.probes and/or std.repair_max_nodes;")
         println(io,prefix,"        consider std.exact_max_nred for affordable full exact calculation. Inspect std_quality_*.txt.")
-        println(io,prefix,"        For skipped/failed solves, inspect the reason; for explicit proxies, select auto/hutch first.")
+        println(io,prefix,"        For skipped/failed solves, inspect the reason; for explicit proxies, select exact or a sampling mode first.")
     else
         println(io,prefix,"Below the 10% review advisory threshold. Inspect flagged entries and group summaries before weighting.")
     end
-    println(io,prefix,"Unconverged Hutch entries with relative MC SE >= 1, invalid estimates or too few probes cannot be kept;")
+    println(io,prefix,"Sampled entries with relative MC SE >= 1, invalid estimates or too few probes cannot be kept;")
     println(io,prefix,"after selected repairs these entries use fallback. They are included in the fallback/proxy counts above.")
     return c
 end
@@ -78,12 +81,13 @@ function writeMetricsReport(io, groups, components, overall)
     by_group = uncertaintyByGroup(components)
     empty_counts = uncertaintyCounts(())
     println(io,"\n# UNCERTAINTY BY GROUP (counts and percentages use each group's assessed std entries)")
-    @printf(io,"# %-*s %8s %18s %18s %18s %18s %12s %10s\n",width,"group","n_std",
-        "exact","hutch_converged","hutch_unconverged","fallback/proxy","review_pct","disabled")
+    @printf(io,"# %-*s %8s %18s %18s %18s %20s %20s %18s %12s %10s\n",width,"group","n_std",
+        "exact","hutch_converged","hutch_unconverged","cholesky_converged","cholesky_unconverged","fallback/proxy","review_pct","disabled")
     for g in groups
         c = get(by_group,g.group,empty_counts)
-        @printf(io,"# %-*s %8d %18s %18s %18s %18s %12s %10d\n",width,g.group,c.total,
-            stdCountPercent(c.exact,c.total),stdCountPercent(c.hutch,c.total),stdCountPercent(c.unconverged,c.total),
+        @printf(io,"# %-*s %8d %18s %18s %18s %20s %20s %18s %12s %10d\n",width,g.group,c.total,
+            stdCountPercent(c.exact,c.total),stdCountPercent(c.hutch,c.total),stdCountPercent(c.unconverged-c.cholesky_kept,c.total),
+            stdCountPercent(c.cholesky,c.total),stdCountPercent(c.cholesky_kept,c.total),
             stdCountPercent(c.fallback,c.total),stdPercent(c.review,c.total),c.disabled)
     end
     flagged = [g.group for g in groups if needsStdReview(get(by_group,g.group,empty_counts))]
@@ -93,13 +97,13 @@ function writeMetricsReport(io, groups, components, overall)
         println(io,"# inspect skip/solve reasons and explicit proxy settings before rerunning.")
         for group in flagged;println(io,"#   ",group);end
     end
-    println(io,"\n# COMPONENT DETAILS (all methods, including converged Hutch)")
+    println(io,"\n# COMPONENT DETAILS (all uncertainty methods)")
     println(io,"# max_rel_se is the pre-repair diagnostic, not the error of exact repairs; scales are seconds.")
     for c in components
         @printf(io,"# std_component group=%s ref=%d nodes=%d method=%s\n",c.group,c.ref,c.nodes,c.method)
         @printf(io,"#   reason=%s probes=%d max_rel_se=%.6g\n",c.reason,c.probes,c.max_rel_se)
         @printf(io,"#   sigma_hat=%.6g sigma_std=%.6g repair_attempted=%d repaired_nodes=%d\n",c.sigma_hat,c.sigma_std,c.repair_attempted,c.repaired_nodes)
-        @printf(io,"#   exact_nodes=%d hutch_converged=%d unconverged_nodes=%d fallback_nodes=%d\n\n",
-            c.exact_nodes,c.hutch_converged,c.unconverged_nodes,c.fallback_nodes)
+        @printf(io,"#   exact_nodes=%d hutch_converged=%d cholesky_converged=%d cholesky_unconverged=%d unconverged_nodes=%d fallback_nodes=%d\n\n",
+            c.exact_nodes,c.hutch_converged,get(c,:cholesky_converged,0),get(c,:cholesky_unconverged,0),c.unconverged_nodes,c.fallback_nodes)
     end
 end

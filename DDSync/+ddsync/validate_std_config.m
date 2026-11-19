@@ -1,6 +1,7 @@
 function validate_std_config(cfg)
 %VALIDATE_STD_CONFIG Reject invalid estimator options before writing outputs.
-assert(ismember(lower(cfg.mode),{'auto','hutch','exact','graph_bound','pseudo_degree','pseudo_weight','none'}),'Invalid std.mode');
+assert(ismember(lower(cfg.mode),{'auto','hutch','cholesky','exact','graph_bound','pseudo_degree','pseudo_weight','none'}),'Invalid std.mode');
+assert(~isfield(cfg,'auto_probe') || ismember(lower(cfg.auto_probe),{'hutch','cholesky'}),'std.auto_probe must be hutch or cholesky');
 assert(ismember(lower(cfg.fallback),{'exact','graph_bound','pseudo_degree','pseudo_weight','nan','none'}),'Invalid std.fallback');
 assert(ismember(lower(cfg.hutch.probe_dist),{'rademacher','gaussian'}),'Invalid std.hutch.probe_dist');
 assert(ismember(lower(cfg.unconverged),{'keep','fallback'}),'Invalid std.unconverged');

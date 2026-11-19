@@ -20,13 +20,14 @@ fprintf(fid,'\n# OVERALL\n');
 fprintf(fid,'overall_edges=%d\noverall_kept=%d\noverall_pruned_pct=%.3f\n',overall.edges,overall.kept,100*(overall.edges-overall.kept)/max(overall.edges,1));
 fprintf(fid,'pseudo_groups_used=%d\npseudo_components_used=%d\n',overall.pseudo_groups,overall.pseudo_components);
 fprintf(fid,'\n# UNCERTAINTY BY GROUP (counts and percentages use each group''s assessed std entries)\n');
-head=['# %-' num2str(width) 's %8s %18s %18s %18s %18s %12s %10s\n'];
-row=['# %-' num2str(width) 's %8d %18s %18s %18s %18s %12s %10d\n'];
-fprintf(fid,head,'group','n_std','exact','hutch_converged','hutch_unconverged','fallback/proxy','review_pct','disabled');
+head=['# %-' num2str(width) 's %8s %18s %18s %18s %20s %20s %18s %12s %10s\n'];
+row=['# %-' num2str(width) 's %8d %18s %18s %18s %20s %20s %18s %12s %10d\n'];
+fprintf(fid,head,'group','n_std','exact','hutch_converged','hutch_unconverged','cholesky_converged','cholesky_unconverged','fallback/proxy','review_pct','disabled');
 for k=1:numel(groups)
     g=groups(k);q=group_summaries(k);
     fprintf(fid,row,g.group,q.total,cellstr_count(q.exact,q.total),cellstr_count(q.hutch_converged,q.total), ...
-        cellstr_count(q.hutch_unconverged,q.total),cellstr_count(q.fallback,q.total),pct(q.review,q.total),q.disabled);
+        cellstr_count(q.hutch_unconverged,q.total),cellstr_count(q.cholesky_converged,q.total), ...
+        cellstr_count(q.cholesky_unconverged,q.total),cellstr_count(q.fallback,q.total),pct(q.review,q.total),q.disabled);
 end
 flagged={};
 for k=1:numel(groups)
@@ -39,13 +40,14 @@ if ~isempty(flagged)
     fprintf(fid,'# inspect skip/solve reasons and explicit proxy settings before rerunning.\n');
     for k=1:numel(flagged),fprintf(fid,'#   %s\n',flagged{k});end
 end
-fprintf(fid,'\n# COMPONENT DETAILS (all methods, including converged Hutch)\n');
+fprintf(fid,'\n# COMPONENT DETAILS (all methods, including both sampling methods)\n');
 fprintf(fid,'# max_rel_se is the pre-repair diagnostic, not the error of exact repairs; scales are seconds.\n');
 for d=components
     fprintf(fid,'# std_component group=%s ref=%d nodes=%d method=%s\n',d.group,d.ref,d.nodes,d.method);
     fprintf(fid,'#   reason=%s probes=%d max_rel_se=%.6g\n',d.reason,d.probes,d.max_rel_se);
     fprintf(fid,'#   sigma_hat=%.6g sigma_std=%.6g repair_attempted=%d repaired_nodes=%d\n',d.sigma_hat,d.sigma_std,d.repair_attempted,d.repaired_nodes);
-    fprintf(fid,'#   exact_nodes=%d hutch_converged=%d unconverged_nodes=%d fallback_nodes=%d\n\n',d.exact_nodes,d.hutch_converged,d.unconverged_nodes,d.fallback_nodes);
+    q=ddsync.uncertainty_summary(d);
+    fprintf(fid,'#   exact_nodes=%d hutch_converged=%d cholesky_converged=%d cholesky_unconverged=%d unconverged_nodes=%d fallback_nodes=%d\n\n',d.exact_nodes,d.hutch_converged,q.cholesky_converged,q.cholesky_unconverged,d.unconverged_nodes,d.fallback_nodes);
 end
 end
 function value=pct(count,total)
@@ -60,7 +62,7 @@ function summaries=summarize_groups(groups,components)
 summaries=repmat(ddsync.uncertainty_summary(struct([])),1,numel(groups));
 index=containers.Map('KeyType','char','ValueType','double');
 for k=1:numel(groups),index(groups(k).group)=k;end
-fields={'exact','hutch_converged','hutch_unconverged','fallback','disabled','references','total','review'};
+fields={'exact','hutch_converged','hutch_unconverged','cholesky_converged','cholesky_unconverged','fallback','disabled','references','total','review'};
 for d=components
     if ~isKey(index,d.group),continue;end
     k=index(d.group);part=ddsync.uncertainty_summary(d);q=summaries(k);

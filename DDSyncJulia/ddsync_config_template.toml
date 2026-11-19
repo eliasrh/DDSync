@@ -57,28 +57,29 @@
 
 [std]
 export = true
-mode = "auto"                  # exact for small components, otherwise per-event Hutch/repair
-fallback = "pseudo_degree"     # only unresolved entries; graph_bound is explicit opt-in
-exact_max_nred = 2048           # full exact cap; auto switches to Hutch above it
-repair_max_nodes = 128          # selected full-system exact solves, reusing Hutch factorization
-unconverged = "keep"            # keep positive unresolved estimates with relative MC SE < 1; or "fallback"
+# Each connected group is timed relative to one reference event.
+mode = "auto"                 # Calculate small groups exactly. Sample larger groups.
+auto_probe = "hutch"          # Change to "cholesky" to use squared draws for larger groups.
+exact_max_nred = 2048         # Largest number of non-reference events for a fully exact calculation.
+# Set mode to "hutch" or "cholesky" to sample even small groups.
 
-# Maximum stochastic budget; successful entries survive failures elsewhere.
-# At the budget limit, repair invalid or unconverged entries individually.
-# Negative/nonfinite or near-zero noisy estimates are never clipped to a floor.
-# Read the four-category percentages and review advice in sync_metrics.txt.
-# Unrepaired relative MC SE >= 1 still uses fallback; this is counted explicitly.
-# Component details are at the end; std_quality_*.txt identifies individual rows.
-# See ../docs/uncertainty.md. In auto mode, small components use no probes.
-# probes=0 skips Hutch; fallback applies (exact fallback still respects its cap).
-probes = 4096
-min_probes = 128
-rel_tol = 0.10                  # MC SE / diagonal; not a guaranteed relative error bound
-probe_dist = "rademacher"       # "rademacher" | "gaussian"
+# Cholesky first checks at 256 draws, then 512, 1024 and so on, up to probes.
+# It calculates the variance of one shared timing shift directly.
+# Hutchinson checks after each batch once it has collected min_probes.
+probes = 4096                 # Maximum draws per group. Zero skips sampling.
+min_probes = 128              # Minimum draws to accept a sampled value. Above 256 this also delays Cholesky's first check.
+rel_tol = 0.10                # Stop when every event's estimated sampling error is at most 10% of its variance.
+probe_dist = "rademacher"     # Random signs (+1 or -1). "gaussian" draws normal random numbers.
+batch = 128                   # Vectors solved at once. Smaller batches need less working memory.
+report_every_batch = 10       # Print progress every 10 batches. Zero turns progress messages off.
+max_nred = 40000              # Use fallback above this many non-reference events in one group.
 
-batch = 128
-report_every_batch = 10
-max_nred = 40000
+repair_max_nodes = 128        # At the limit, calculate up to 128 troublesome event variances exactly.
+unconverged = "keep"          # Retain usable positive estimates, flagged per event. "fallback" replaces them.
+fallback = "pseudo_degree"    # Approximate remaining errors from each event's number of connections.
+# A sampled variance must be positive and finite, with enough draws and sampling error
+# below the variance itself, to qualify for "keep". See sync_metrics.txt for percentages
+# and std_quality_*.txt for each event's method. See ../docs/uncertainty.md for details.
 
 # After fitting, DDSync compares each retained measured differential travel time
 # with theta_i - theta_j. sigma_hat is the scatter of these mismatches, in seconds,

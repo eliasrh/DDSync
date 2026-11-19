@@ -1,5 +1,7 @@
 # DDSync (Julia)
 
+For timing uncertainty, `auto_probe = "cholesky"` enables squared random draws with a shared timing shift calculated exactly. Hutchinson is the default. [Settings, an example, report labels and large-system limits](../docs/updates/2026-11-19-cholesky-uncertainties.md).
+
 Julia is the primary implementation. MATLAB receives bug fixes. See the [19 November 2026 reporting update](../docs/updates/2026-11-19-uncertainty-reporting.md) and the [uncertainty and probe guide](../docs/uncertainty.md).
 
 DDSync reads a HypoDD/GrowClust-style `dt.cc` file, processes one station-phase group at a time, and writes a cleaned and synchronized differential-time file. For each station and phase, it estimates one relative arrival-time value, `theta`, for every event that can be constrained by the data. A kept observation between events `i` and `j` is then represented by `theta(i) - theta(j)`.
@@ -198,7 +200,7 @@ Optional columns may be added:
 EventID  std_theta  refEventID  degree  thetaWeight  nodeWeight
 ```
 
-`std_theta` is a converged or explicitly labeled unconverged Hutchinson estimate, an exact inverse-diagonal calculation, an explicitly requested graph bound, a fast pseudo standard deviation, or explicitly disabled (`NaN`) uncertainty, depending on `std.mode` and fallback behavior. `degree` is the number of kept incident edges in the final graph. `thetaWeight` is a practical inverse-uncertainty weight derived from `std_theta`. `nodeWeight` is an optional diagnostic node-weight summary used by `pseudo_weight` mode.
+`std_theta` is a converged or explicitly labeled unconverged Hutchinson or Cholesky estimate, an exact inverse-diagonal calculation, an explicitly requested graph bound, a fast pseudo standard deviation, or explicitly disabled (`NaN`) uncertainty, depending on `std.mode` and fallback behavior. `degree` is the number of kept incident edges in the final graph. `thetaWeight` is a practical inverse-uncertainty weight derived from `std_theta`. `nodeWeight` is an optional diagnostic node-weight summary used by `pseudo_weight` mode.
 
 ### `sync_metrics.txt`
 
@@ -208,9 +210,9 @@ A readable report with aligned, whitespace-separated station-phase columns. The 
 group    n_edges  n_kept  pruned_pct  robust_p50  robust_p05  robust_p95  frac_robust_lt_0p99  sigma_hat
 ```
 
-`group` is the station-phase key, `n_edges` is the number of input measurements, and `n_kept` is the number retained after component gating and pruning. The four uncertainty categories are **exact**, **converged Hutch**, **kept unconverged Hutch**, and **fallback/proxy**. Exact includes selected exact repairs; fallback includes explicitly selected degree/weight proxies or graph bounds. Counts and percentages describe supported non-reference std entries across station-phase files, not unique catalog events. Gauge references, rejected/isolated rows and deliberately disabled uncertainty are excluded; disabled entries are counted separately. Percentages are `N/A` if there are no assessed entries.
+`group` is the station-phase key, `n_edges` is the number of input measurements, and `n_kept` is the number retained after component gating and pruning. The report counts **exact**, **converged** and **kept unconverged** entries for each sampler, and **fallback/proxy**. Exact is counted once. Exact includes selected exact repairs; fallback includes explicitly selected degree/weight proxies or graph bounds. Counts and percentages describe supported non-reference std entries across station-phase files, not unique catalog events. Gauge references, rejected/isolated rows and deliberately disabled uncertainty are excluded; disabled entries are counted separately. Percentages are `N/A` if there are no assessed entries.
 
-The **requires-review share** is kept unconverged Hutch plus fallback. At 10% or more, the report advises increasing probes and/or exact repairs, or considering a larger full exact cap. Groups receive their own advice so a poorly estimated small group cannot disappear inside a good global average. This reporting threshold is an operational prompt, not a statistical confidence bound. A large exact-plus-converged share is favorable; it does not itself trigger advice to increase sampling.
+The **requires-review share** includes both samplers’ kept unconverged estimates plus fallback. At 10% or more, the report advises increasing probes and/or exact repairs, or considering a larger full exact cap. Groups receive their own advice so a poorly estimated small group cannot disappear inside a good global average. This reporting threshold is an operational prompt, not a statistical confidence bound. A large exact-plus-converged share is favorable; it does not itself trigger advice to increase sampling.
 
 All scale values are in seconds. After the final fit, DDSync compares each retained measured differential travel time with `theta_i - theta_j`. Component `sigma_hat` measures the scatter of these mismatches within one connected group at one station and phase; DDSync uses it to estimate noise in the pairwise measurements.
 
@@ -365,31 +367,33 @@ For `thetaStd`, DDSync uses `sqrt(std_theta_i^2 + std_theta_j^2)` and ignores co
 | Field | Default | Plain-language meaning |
 | --- | ---: | --- |
 | `export` | `true` | Write `std_theta_*.txt` and per-event `std_quality_*.txt` in the std directory. |
-| `mode` | `"auto"` | Exact up to the size cap, otherwise per-event Hutchinson with selected exact repair. Explicit `hutch`, `exact`, `graph_bound`, `pseudo_degree`, `pseudo_weight`, and `none` remain available. |
+| `mode` | `"auto"` | Exact up to the size cap, otherwise use the sampler selected by `auto_probe` with per-event exact repair. Explicit `hutch`, `cholesky`, `exact`, `graph_bound`, `pseudo_degree`, `pseudo_weight`, and `none` remain available. |
 | `fallback` | `"pseudo_degree"` | Only entries still unusable after repair/retention use fallback. Options: `pseudo_degree`, `pseudo_weight`, `exact`, `graph_bound`. Legacy `nan`/`none` aliases now use degree fallback. |
-| `exact_max_nred` | `2048` | Full exact size cap in unpinned events. `auto` switches to Hutch above it; explicit exact mode above it uses fallback. |
-| `repair_max_nodes` | `128` | Maximum selected full-system exact corrections after Hutch, reusing its factorization. Applies independently of component size. |
-| `unconverged` | `"keep"` | Retain unrepaired positive estimates with enough samples and relative MC SE below 1, labeled `hutch_unconverged`. Use `fallback` to replace all failing entries instead. |
+| `auto_probe` | `"hutch"` | Sampler for larger groups in automatic mode. Choose `cholesky` for squared draws with the shared timing shift handled directly. |
+| `exact_max_nred` | `2048` | Full exact size cap in unpinned events. `auto` uses `auto_probe` above it; explicit exact mode above it uses fallback. |
+| `repair_max_nodes` | `128` | Maximum selected full-system exact corrections after sampling, reusing the factorization. Applies independently of component size. |
+| `unconverged` | `"keep"` | Retain unrepaired positive estimates with enough samples and relative MC SE below 1, labeled `hutch_unconverged` or `cholesky_unconverged`. Use `fallback` to replace all failing entries instead. |
 | `min_sigma` | `5e-4` | Minimum assumed scatter of measured differential travel times around fitted `theta_i - theta_j`, in seconds, when calculating uncertainty. **Not a minimum `std_theta`; exported values can be smaller.** |
 | `apply_min_sigma` | `true` | Switch for `min_sigma`. Set false, or set `min_sigma` to `0`, to disable this minimum assumed mismatch scatter. These options do not floor final theta uncertainties. |
 | `pseudo_weight_source` | `"combined"` | Edge weight source for `pseudo_weight` and `nodeWeight`: `"combined"`, `"robust"`, or `"base"`. |
 | `pseudo_weight_eps` | `1e-6` | Minimum node weight before inverting in `pseudo_weight` mode. Prevents division by zero. |
 | `thetastd_write_weightcol` | `true` | Add the practical `thetaWeight` column to `std_theta_*.txt`. |
 | `thetastd_write_alt_node_weightcol` | `false` | Add `nodeWeight` to `std_theta_*.txt`. If `thetastd_write_weightcol` is also true, this is the sixth column; otherwise it is the fifth. |
-| `probes` | `4096` | Maximum Hutchinson probe budget. Stops early if every node passes the diagnostic. Set `0` to use fallback directly. |
+| `probes` | `4096` | Maximum sampling budget. Stops early if every node passes the diagnostic. Set `0` to use fallback directly. |
 | `min_probes` | `128` | Minimum samples before accepting convergence (at least 2). A smaller budget permits exact repair or fallback, but no accepted/retained stochastic values. |
 | `rel_tol` | `0.10` | Maximum empirical standard error divided by estimated diagonal, tested independently for each unpinned node. This is not a guaranteed relative error bound. |
 | `probe_dist` | `"rademacher"` | Random probe distribution: `"rademacher"` (`+1/-1`) or `"gaussian"`. |
 | `batch` | `128` | Number of probes solved at once. Larger can be faster but uses more memory. |
 | `report_every_batch` | `10` | Print progress every this many batches. Set `0` to silence batch progress. |
-| `max_nred` | `40000` | Skip Hutchinson if the reduced system is larger than this many unknowns; use fallback instead. |
+| `max_nred` | `40000` | Skip sampling if the reduced system is larger than this many unknowns; use fallback instead. |
 | `min_diag_rel` | `1e-12` | Deprecated and ignored. Invalid variance estimates trigger fallback; they are never clipped to a positive floor. |
 
 Mode meanings:
 
 | Mode | Meaning |
 | --- | --- |
-| `"auto"` | Exact directly for small components, otherwise Hutchinson and per-event repair. |
+| `"auto"` | Exact directly for small components, otherwise the configured sampler and per-event repair. |
+| `cholesky` | Sample all eligible groups with squared draws. Normally check at 256 draws and double only if needed. |
 | `"hutch"` | Sample even small components. Preserve converged entries, repair selected failures, and retain or replace only remaining failing entries. |
 | `"exact"` | Unit-vector solves up to the full exact cap; no sampling noise. Beyond that limit use configured fallback (degree by default). |
 | `"graph_bound"` | Explicit, potentially very loose upper bound from tree path resistances. Never selected automatically by the defaults. |
