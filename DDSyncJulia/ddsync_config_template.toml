@@ -77,6 +77,7 @@ max_nred = 40000              # Use fallback above this many non-reference event
 repair_max_nodes = 128        # At the limit, calculate up to 128 troublesome event variances exactly.
 unconverged = "keep"          # Retain usable positive estimates, flagged per event. "fallback" replaces them.
 fallback = "pseudo_degree"    # Approximate remaining errors from each event's number of connections.
+# With pseudo_degree, four connections give an approximate timing error equal to half the timing scatter.
 # A sampled variance must be positive and finite, with enough draws and sampling error
 # below the variance itself, to qualify for "keep". See sync_metrics.txt for percentages
 # and std_quality_*.txt for each event's method. See ../docs/uncertainty.md for details.

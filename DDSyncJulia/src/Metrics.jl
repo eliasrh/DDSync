@@ -43,6 +43,8 @@ function writeUncertaintySummary(io, components; prefix="# ")
                       ("Converged Cholesky",c.cholesky),("Kept unconverged Cholesky",c.cholesky_kept),("Fallback / proxy",c.fallback))
         @printf(io,"%s%-30s %12d %12s\n",prefix,label,n,stdPercent(n,c.total))
     end
+    println(io,prefix,"A draw is one random sample. Relative MC SE is the estimated sampling error divided by the event timing variance estimate.")
+    println(io,prefix,"For example, 0.10 means 10% sampling error on the variance. The uncertainty exported in seconds is its square root after scaling.")
     println(io,prefix,"Requires review (kept unconverged + fallback/proxy): ",stdCountPercent(c.review,c.total))
     println(io,prefix,"Numerically checked (exact + converged estimates): ",stdCountPercent(c.exact+c.hutch+c.cholesky,c.total))
     println(io,prefix,"Fallback/proxy includes explicitly requested proxies/bounds. Checked does not mean physically calibrated.")

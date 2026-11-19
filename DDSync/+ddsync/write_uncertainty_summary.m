@@ -10,6 +10,8 @@ counts=[summary.exact,summary.hutch_converged,summary.hutch_unconverged,summary.
 for k=1:numel(labels)
     fprintf(fid,'%s%-30s %12d %12s\n',prefix,labels{k},counts(k),pct(counts(k),summary.total));
 end
+fprintf(fid,'%sA draw is one random sample. Relative MC SE is the estimated sampling error divided by the event timing variance estimate.\n',prefix);
+fprintf(fid,'%sFor example, 0.10 means 10%% sampling error on the variance. The uncertainty exported in seconds is its square root after scaling.\n',prefix);
 fprintf(fid,'%sRequires review (kept unconverged + fallback/proxy): %d (%s)\n',prefix,summary.review,pct(summary.review,summary.total));
 fprintf(fid,'%sNumerically checked (exact + converged estimates): %d (%s)\n',prefix,summary.exact+summary.hutch_converged+summary.cholesky_converged,pct(summary.exact+summary.hutch_converged+summary.cholesky_converged,summary.total));
 fprintf(fid,'%sFallback/proxy includes explicitly requested proxies/bounds. Checked does not mean physically calibrated.\n',prefix);

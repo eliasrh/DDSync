@@ -212,7 +212,7 @@ function estimateThetaStd(n,a,b,w,pin,free,ridge,sigma,opts; pseudo_weight=fill(
         reason=opts.probes<=0 ? "disabled_probes" : "size_limit"
         mode="exact"
     end
-        if mode in ("exact","hutch","cholesky")
+    if mode in ("exact","hutch","cholesky")
         if mode=="exact" && nr>opts.exact_max_nred
             reason="exact_size_limit"
         elseif mode in ("hutch","cholesky") && (opts.probes<=0 || nr>opts.max_nred)

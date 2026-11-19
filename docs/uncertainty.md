@@ -162,7 +162,7 @@ The observation table uses aligned whitespace-separated columns. Component detai
 | `sigma_hat`, `sigma_std` | Measured scatter of fitted-minus-observed differential travel times, and the scatter used in uncertainty formulas after applying the optional minimum, both in seconds. |
 | `cholesky_converged` | Events whose Cholesky variance estimate met the sampling target. |
 | `cholesky_unconverged` | Events whose Cholesky estimate was kept above the target. |
-| `hutch_converged` | Number of preserved converged stochastic entries. |
+| `hutch_converged` | Events whose Hutchinson variance estimate met the sampling target. |
 | `exact_nodes` | Number supplied by full or selected exact calculation. |
 | `repair_attempted`, `repaired_nodes` | Selected solves attempted and successfully used. |
 | `unconverged_nodes` | Retained positive stochastic estimates that failed the requested tolerance. |
