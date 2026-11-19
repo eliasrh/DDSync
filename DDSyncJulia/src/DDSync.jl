@@ -84,7 +84,8 @@ function config_default()
 
     cfg[:std] = Dict{Symbol,Any}(
         :export                           => true,
-        :mode                             => "auto",          # exact for small components, otherwise per-event Hutch/repair
+        :mode                             => "auto",          # exact for small components
+        :auto_probe                       => "hutch",         # sampler for larger components in auto mode
         :fallback                         => "pseudo_degree", # only entries still unusable after selected exact repair
         :probes                           => 4096,           # maximum; stop early when diagnostics pass
         :min_probes                       => 128,
@@ -249,6 +250,7 @@ function run(cfg::Dict{Symbol,Any}=config_default())
         EXPORT_THETA_STD ? 1 : 0, STD_PROBES, dist_print, thetastd_mode_print)
     @printf(fidm, "# STD_MIN_PROBES=%d STD_REL_TOL=%g STD_BATCH=%d STD_FALLBACK=%s STD_EXACT_MAX_NRED=%d\n",
         std_cfg[:min_probes], std_cfg[:rel_tol], STD_BATCH, THETASTD_FALLBACK, std_cfg[:exact_max_nred])
+    println(fidm, "# STD_AUTO_PROBE=",get(std_cfg,:auto_probe,"hutch"))
     @printf(fidm, "# STD_REPAIR_MAX_NODES=%d STD_UNCONVERGED=%s\n", std_cfg[:repair_max_nodes], std_cfg[:unconverged])
     @printf(fidm, "# STD_MIN_SIGMA=%g STD_APPLY_MIN_SIGMA=%s\n",STD_MIN_SIGMA,string(STD_APPLY_MIN_SIGMA))
     metrics_rows = NamedTuple[]
@@ -299,6 +301,7 @@ function run(cfg::Dict{Symbol,Any}=config_default())
             PSEUDO_WEIGHT_SOURCE=PSEUDO_WEIGHT_SOURCE, PSEUDO_WEIGHT_EPS=PSEUDO_WEIGHT_EPS,
             THETASTD_SCALE_FIXED=THETASTD_SCALE_FIXED,
             WRITE_ALT_NODEW_COL=WRITE_THETASTD_ALT_NODEW_COL,
+            STD_AUTO_PROBE=lowercase(String(get(std_cfg,:auto_probe,"hutch"))),
             STD_MIN_PROBES=Int(std_cfg[:min_probes]), STD_REL_TOL=Float64(std_cfg[:rel_tol]),
             STD_EXACT_MAX_NRED=Int(std_cfg[:exact_max_nred]),
             STD_REPAIR_MAX_NODES=Int(std_cfg[:repair_max_nodes]), STD_UNCONVERGED=lowercase(String(std_cfg[:unconverged])),
@@ -416,7 +419,7 @@ function run(cfg::Dict{Symbol,Any}=config_default())
     for g in metrics_rows
         c=get(by_group,g.group,uncertaintyCounts(()))
         if needsStdReview(c)
-            @printf("[STD GROUP ADVICE] %s: %s require review; increase probes/repairs as appropriate. See %s.\n",
+            @printf("[STD GROUP ADVICE] %s: %s require review. See the group recommendations in %s.\n",
                 g.group,stdPercent(c.review,c.total),metrics_file)
         end
     end
@@ -1061,7 +1064,7 @@ function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{F
     THETASTD_SCALE_FIXED::Float64,
     WRITE_ALT_NODEW_COL::Bool=false,
     STD_MIN_PROBES::Int=128, STD_REL_TOL::Float64=0.10, STD_EXACT_MAX_NRED::Int=2048,
-    STD_REPAIR_MAX_NODES::Int=128, STD_UNCONVERGED::String="keep")
+    STD_REPAIR_MAX_NODES::Int=128, STD_UNCONVERGED::String="keep", STD_AUTO_PROBE::String="hutch")
 
     ev_all = sort(unique(vcat(gi, gj)))
     nNodes = length(ev_all)
@@ -1149,7 +1152,7 @@ function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{F
             nodew_local[nodes_c] .= nodew_c
         end
 
-        opts=(mode=EXPORT_THETA_STD ? THETASTD_MODE : "none",fallback=THETASTD_FALLBACK,
+        opts=(mode=EXPORT_THETA_STD ? THETASTD_MODE : "none",auto_probe=STD_AUTO_PROBE,fallback=THETASTD_FALLBACK,
             probes=STD_PROBES,probe_dist=STD_PROBE_DIST,batch=STD_BATCH,report_every_batch=STD_REPORT_EVERY,
             max_nred=STD_MAX_NRED,min_probes=STD_MIN_PROBES,rel_tol=STD_REL_TOL,
             exact_max_nred=STD_EXACT_MAX_NRED,repair_max_nodes=STD_REPAIR_MAX_NODES,unconverged=STD_UNCONVERGED)

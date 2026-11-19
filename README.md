@@ -11,6 +11,14 @@ The synchronization algorithm and its defaults are shared. Input-ID handling
 differs: Julia now maps arbitrary integer IDs automatically, while MATLAB
 still requires users to prepare compact positive IDs before running.
 
+## Update · 19 November 2026 — Cholesky timing uncertainties
+
+**If many Hutch estimates miss the sampling target, try Cholesky before increasing the number of probes.**
+
+Events can shift together relative to their timing reference. Cholesky calculates the contribution from one shared shift directly and estimates the rest with squared random draws. In automatic mode, set `auto_probe = "cholesky"` to use it on larger groups. If you explicitly set `mode = "hutch"`, change it to `mode = "cholesky"`. With the default settings, Cholesky first checks after 256 draws. The report shows how many estimates met the target, how many were kept despite exceeding it, and how many used a fallback. Hutchinson remains the default sampler.
+
+Read [how to enable Cholesky sampling and interpret the results](docs/updates/2026-11-19-cholesky-uncertainties.md).
+
 ## Update (19 November 2026): visible uncertainty quality
 
 `sync_metrics.txt` now gives counts and percentages for exact, converged Hutch, kept unconverged Hutch, and fallback std values, globally and by station-phase group. It advises further sampling or exact repairs when at least 10% require review. Observation columns are aligned, and component details are grouped at the end. The default maximum probe budget is now **4096**; explicit older settings remain in effect.

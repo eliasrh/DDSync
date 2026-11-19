@@ -72,7 +72,7 @@ STD_APPLY_MIN_SIGMA = cfg.std.apply_min_sigma && ~isempty(STD_MIN_SIGMA) && (STD
 STD_MIN_DIAGREL = cfg.std.hutch.min_diagrel;
 
 % Pseudo std / fallback behavior
-THETASTD_MODE            = cfg.std.mode;      % 'auto'|'hutch'|'exact'|'graph_bound'|'pseudo_degree'|'pseudo_weight'|'none'
+THETASTD_MODE            = cfg.std.mode;      % 'auto'|'hutch'|'cholesky'|'exact'|'graph_bound'|'pseudo_degree'|'pseudo_weight'|'none'
 THETASTD_FALLBACK        = cfg.std.fallback;  % skipped/unreliable Hutch: 'exact'|'graph_bound'|'pseudo_degree'|'pseudo_weight'
 PSEUDO_WEIGHT_SOURCE     = cfg.std.pseudo_weight_source; % 'combined'|'robust'|'base'
 PSEUDO_WEIGHT_EPS        = cfg.std.pseudo_weight_eps;
@@ -124,6 +124,7 @@ fprintf(fidm,'# K_SIGMA=%g MIN_EDGES=%d IRLS_ITERS=%d C_HUBER=%g MODE=%s STD_EXP
     K_SIGMA, MIN_EDGES, IRLS_ITERS, C_HUBER, OUTPUT_WEIGHT_MODE, EXPORT_THETA_STD, THETASTD_MODE, STD_PROBES);
 fprintf(fidm,'# STD_MIN_PROBES=%d STD_REL_TOL=%g STD_BATCH=%d STD_FALLBACK=%s STD_EXACT_MAX_NRED=%d\n', ...
     cfg.std.hutch.min_probes, cfg.std.hutch.rel_tol, STD_BATCH, THETASTD_FALLBACK, cfg.std.exact_max_nred);
+fprintf(fidm,'# STD_AUTO_PROBE=%s\n',cfg.std.auto_probe);
 fprintf(fidm,'# STD_REPAIR_MAX_NODES=%d STD_UNCONVERGED=%s\n',cfg.std.repair_max_nodes,cfg.std.unconverged);
 if isempty(STD_MIN_SIGMA),min_sigma_text='[]';else,min_sigma_text=sprintf('%.6g',STD_MIN_SIGMA);end
 fprintf(fidm,'# STD_MIN_SIGMA=%s STD_APPLY_MIN_SIGMA=%d\n',min_sigma_text,STD_APPLY_MIN_SIGMA);
@@ -154,7 +155,7 @@ for g=1:nGroups
             STD_PROBES, STD_PROBE_DIST, STD_BATCH, STD_REPORT_EVERY_BATCH, ...
             STD_MAX_NRED, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_MIN_DIAGREL, ...
             PSEUDO_WEIGHT_SOURCE, PSEUDO_WEIGHT_EPS, ...
-            THETASTD_SCALE_FIXED, cfg.std.hutch.min_probes, cfg.std.hutch.rel_tol, cfg.std.exact_max_nred, WRITE_ALT_NODE_WEIGHTCOL, cfg.std.repair_max_nodes, cfg.std.unconverged);
+            THETASTD_SCALE_FIXED, cfg.std.hutch.min_probes, cfg.std.hutch.rel_tol, cfg.std.exact_max_nred, WRITE_ALT_NODE_WEIGHTCOL, cfg.std.repair_max_nodes, cfg.std.unconverged, cfg.std.auto_probe);
 
     if pseudo_info.used_pseudo
         nPseudoGroups = nPseudoGroups + 1;
@@ -587,7 +588,7 @@ function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full
         EXPORT_THETA_STD, THETASTD_MODE, THETASTD_FALLBACK, ...
         STD_PROBES, STD_PROBE_DIST, STD_BATCH, STD_REPORT_EVERY_BATCH, ...
         STD_MAX_NRED, STD_MIN_SIGMA, STD_APPLY_MIN_SIGMA, STD_MIN_DIAGREL, ...
-        PSEUDO_WEIGHT_SOURCE, PSEUDO_WEIGHT_EPS, THETASTD_SCALE_FIXED, STD_MIN_PROBES, STD_REL_TOL, STD_EXACT_MAX_NRED, WRITE_ALT_NODEW_COL, STD_REPAIR_MAX_NODES, STD_UNCONVERGED)
+        PSEUDO_WEIGHT_SOURCE, PSEUDO_WEIGHT_EPS, THETASTD_SCALE_FIXED, STD_MIN_PROBES, STD_REL_TOL, STD_EXACT_MAX_NRED, WRITE_ALT_NODEW_COL, STD_REPAIR_MAX_NODES, STD_UNCONVERGED, STD_AUTO_PROBE)
 
     ev_all = unique([gi(:); gj(:)]);
     nNodes = numel(ev_all);
@@ -664,7 +665,7 @@ function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full
             nodew_local(nodes_c)=nodew_c;
         end
         mode=lower(THETASTD_MODE);if ~EXPORT_THETA_STD,mode='none';end
-        opts=struct('mode',mode,'fallback',lower(THETASTD_FALLBACK), ...
+        opts=struct('mode',mode,'auto_probe',lower(STD_AUTO_PROBE),'fallback',lower(THETASTD_FALLBACK), ...
             'probes',STD_PROBES,'probe_dist',lower(STD_PROBE_DIST),'batch',STD_BATCH, ...
             'report_every_batch',STD_REPORT_EVERY_BATCH,'max_nred',STD_MAX_NRED, ...
             'min_probes',STD_MIN_PROBES,'rel_tol',STD_REL_TOL,'exact_max_nred',STD_EXACT_MAX_NRED, ...

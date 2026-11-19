@@ -1,6 +1,7 @@
 # Per-event uncertainty decisions. No failed variance is clipped to a floor.
 function validateStdConfig(cfg)
-    lowercase(String(cfg[:mode])) in ("auto", "hutch", "exact", "graph_bound", "pseudo_degree", "pseudo_weight", "none") || error("Invalid std.mode")
+    lowercase(String(cfg[:mode])) in ("auto", "hutch", "cholesky", "exact", "graph_bound", "pseudo_degree", "pseudo_weight", "none") || error("Invalid std.mode")
+    lowercase(String(get(cfg, :auto_probe, "hutch"))) in ("hutch", "cholesky") || error("std.auto_probe must be hutch or cholesky")
     lowercase(String(cfg[:fallback])) in ("exact", "graph_bound", "pseudo_degree", "pseudo_weight", "nan", "none") || error("Invalid std.fallback")
     lowercase(String(cfg[:unconverged])) in ("keep", "fallback") || error("Invalid std.unconverged")
     lowercase(String(cfg[:probe_dist])) in ("rademacher", "gaussian") || error("Invalid std.probe_dist")
@@ -76,6 +77,69 @@ function hutchSamples(L,F,K,dist,batch,reportEvery,min_probes,rel_tol)
     return (mu=mu,m2=m2,converged=good,rel_se=rel,reason=reason,probes=count,max_rel_se=maximum(rel))
 end
 
+# Pinning one reference can leave a timing shift shared by many events.
+# For C = inv(A), v = C*ones and s = sum(v), its covariance is v*v'/s.
+# Draw one sample of C with a triangular solve, remove this shared response,
+# and add its variance back exactly. Never form C or the dense outer product.
+function choleskySamples(A, F, budget, dist, batch, reportEvery, min_probes, rel_tol)
+    n = size(A, 1)
+    mean_variance = zeros(n)
+    m2 = zeros(n)
+    count = 0
+    reason = "insufficient_probes"
+    try
+        ones_rhs = ones(n, 1)
+        common = F \ ones_rhs
+        all(checkedSolveColumns(A, common, ones_rhs)) || throw(LinearAlgebra.SingularException(0))
+        v = vec(common)
+        s = sum(v)
+        if !isfinite(s) || s <= 0
+            throw(LinearAlgebra.PosDefException(0))
+        end
+        weight = v ./ s
+        shared_variance = (v ./ sqrt(s)).^2
+        # CHOLMOD stores A[p,p] = L*L'. UP restores the original event order.
+        upper = sparse(transpose(sparse(F.L)))
+        perm = F.p
+        check_at = min(budget, max(256, min_probes))
+        batches = 0
+        while count < budget
+            k = min(batch, check_at - count)
+            z = dist == "rademacher" ? ifelse.(rand(Bool,n,k),1.0,-1.0) : randn(n,k)
+            draws = F.UP \ z
+            if !all(checkedSolveColumns(upper, draws[perm,:], z))
+                reason = "solve_failed"
+                break
+            end
+            for y in eachcol(draws)
+                shift = sum(y)
+                count += 1
+                @inbounds for i in eachindex(y)
+                    sample = abs2(y[i] - weight[i]*shift) + shared_variance[i]
+                    delta = sample - mean_variance[i]
+                    mean_variance[i] += delta / count
+                    m2[i] += delta * (sample - mean_variance[i])
+                end
+            end
+            batches += 1
+            if count == check_at
+                reason, _ = hutchDiagnostic(mean_variance, m2, count, min_probes, rel_tol)
+                reason == "converged" && break
+                check_at = count + min(count, budget-count)
+            end
+            if reportEvery > 0 && batches % reportEvery == 0
+                @printf("    Cholesky sampling: %d/%d draws completed\n", count, budget)
+            end
+        end
+    catch err
+        err isa LinearAlgebra.SingularException || err isa LinearAlgebra.PosDefException || rethrow()
+        reason = "solve_failed"
+    end
+    good, relative = hutchNodeDiagnostics(mean_variance, m2, count, min_probes, rel_tol)
+    return (mu=mean_variance, m2=m2, converged=good, rel_se=relative,
+            reason=reason, probes=count, max_rel_se=maximum(relative))
+end
+
 # Selected unit-vector solves against the FULL pinned system. A neighborhood
 # inverse would condition away external weak links and is not an exact marginal.
 # Reuse the Hutch factorization. Memory is bounded by nred * batch.
@@ -139,19 +203,19 @@ function estimateThetaStd(n,a,b,w,pin,free,ridge,sigma,opts; pseudo_weight=fill(
     nr=length(free); out=fill(NaN,n); out[pin]=0.0
     methods=fill("unavailable",n); methods[pin]="reference"; rel_se=fill(NaN,n)
     reason="requested"; probes=0; max_rel_se=NaN; repaired=0; attempted=0
-    mode=opts.mode=="auto" ? (nr<=opts.exact_max_nred ? "exact" : "hutch") : opts.mode
+    mode=opts.mode=="auto" ? (nr<=opts.exact_max_nred ? "exact" : get(opts, :auto_probe, "hutch")) : opts.mode
     if mode!="none"
         isfinite(sigma) && sigma>=0 || error("Uncertainty needs a finite nonnegative noise scale; inspect residuals and std.min_sigma.")
     end
     fallback=opts.fallback in ("exact","nan","none") ? "pseudo_degree" : opts.fallback
-    if mode=="hutch" && (opts.probes<=0 || nr>opts.max_nred) && opts.fallback=="exact" && nr<=opts.exact_max_nred
+    if mode in ("hutch","cholesky") && (opts.probes<=0 || nr>opts.max_nred) && opts.fallback=="exact" && nr<=opts.exact_max_nred
         reason=opts.probes<=0 ? "disabled_probes" : "size_limit"
         mode="exact"
     end
-    if mode in ("exact","hutch")
+    if mode in ("exact","hutch","cholesky")
         if mode=="exact" && nr>opts.exact_max_nred
             reason="exact_size_limit"
-        elseif mode=="hutch" && (opts.probes<=0 || nr>opts.max_nred)
+        elseif mode in ("hutch","cholesky") && (opts.probes<=0 || nr>opts.max_nred)
             reason=opts.probes<=0 ? "disabled_probes" : "size_limit"
         else
             L=uncertaintyLaplacian(n,a,b,w,free,ridge)
@@ -167,11 +231,12 @@ function estimateThetaStd(n,a,b,w,pin,free,ridge,sigma,opts; pseudo_weight=fill(
                 out[free[ok]].=sigma.*sqrt.(diagonal[ok]); methods[free[ok]].="exact"
                 all(ok) || (reason="exact_failed")
             else
-                sample=hutchSamples(L,F,opts.probes,opts.probe_dist,opts.batch,opts.report_every_batch,opts.min_probes,opts.rel_tol)
+                sampler = mode == "cholesky" ? choleskySamples : hutchSamples
+                sample=sampler(L,F,opts.probes,opts.probe_dist,opts.batch,opts.report_every_batch,opts.min_probes,opts.rel_tol)
                 reason=sample.reason; probes=sample.probes; max_rel_se=sample.max_rel_se
                 rel_se[free].=sample.rel_se
                 good=sample.converged
-                out[free[good]].=sigma.*sqrt.(sample.mu[good]); methods[free[good]].="hutch"
+                out[free[good]].=sigma.*sqrt.(sample.mu[good]); methods[free[good]].=mode
                 bad=findall(.!good)
                 # Invalid/near-zero estimates have infinite/large relative error
                 # and are repaired first. Ties are deterministic by reduced index.
@@ -189,7 +254,7 @@ function estimateThetaStd(n,a,b,w,pin,free,ridge,sigma,opts; pseudo_weight=fill(
                 if opts.unconverged=="keep" && probes>=opts.min_probes
                     for i in bad
                         if methods[free[i]]=="unavailable" && isfinite(sample.mu[i]) && sample.mu[i]>0 && sample.rel_se[i]<1.0
-                            out[free[i]]=sigma*sqrt(sample.mu[i]); methods[free[i]]="hutch_unconverged"
+                            out[free[i]]=sigma*sqrt(sample.mu[i]); methods[free[i]]=mode * "_unconverged"
                         end
                     end
                 end
@@ -213,8 +278,9 @@ function estimateThetaStd(n,a,b,w,pin,free,ridge,sigma,opts; pseudo_weight=fill(
     end
     kinds=unique(methods[free]); method=length(kinds)==1 ? only(kinds) : "hybrid"
     info=(method=method,reason=reason,probes=probes,max_rel_se=max_rel_se,
-        hutch_converged=count(==("hutch"),methods),exact_nodes=count(==("exact"),methods),
-        repaired_nodes=repaired,repair_attempted=attempted,unconverged_nodes=count(==("hutch_unconverged"),methods),
+        hutch_converged=count(==("hutch"),methods),cholesky_converged=count(==("cholesky"),methods),
+        cholesky_unconverged=count(==("cholesky_unconverged"),methods),exact_nodes=count(==("exact"),methods),
+        repaired_nodes=repaired,repair_attempted=attempted,unconverged_nodes=count(m->m in ("hutch_unconverged","cholesky_unconverged"),methods),
         fallback_nodes=count(x->x in ("pseudo_degree","pseudo_weight","graph_bound"),methods),
         node_methods=methods,node_rel_se=rel_se)
     return out,info

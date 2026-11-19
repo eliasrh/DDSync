@@ -135,6 +135,22 @@ check(failed); % stop rather than export a usable theta with missing sigma
 cfg=ddsync.config_default();cfg.std.hutch.batch=0;failed=false;
 try,ddsync.validate_std_config(cfg.std);catch,failed=true;end
 check(failed);
+% Exercise the public configuration, event labels and adaptive budget.
+cfg=split_config(fullfile(output_root,'cholesky'));
+cfg.std.mode='auto';cfg.std.exact_max_nred=1;cfg.std.auto_probe='cholesky';
+cfg.std.hutch.batch=37;cfg.std.hutch.probes=613;
+rng(309);evalc('ddsync.run(cfg);');
+report=fileread(cfg.io.metrics_file);
+check(contains(report,'Converged Cholesky') && contains(report,'probes=256'));
+check(contains(fileread(fullfile(cfg.io.thetastd_dir,'std_quality_TEST_P.txt')),' cholesky '));
+A=sparse([2,-1,0;-1,1.05,-0.05;0,-0.05,0.05]);
+opts=cfg.std.hutch;opts.rel_tol=0.25;opts.probe_dist='gaussian';
+rng(309);sample=ddsync.cholesky_samples(A,chol(A,'lower'),opts);
+check(sample.probes==256 && all(sample.converged));
+check(all(abs(sample.mu./diag(inv(full(A)))-1)<0.25));
+opts.rel_tol=1e-12;
+rng(309);sample=ddsync.cholesky_samples(A,chol(A,'lower'),opts);
+check(sample.probes==613 && strcmp(sample.reason,'not_converged'));
 checks=checks+per_event_tests();
 checks=checks+metrics_reporting_tests();
 fprintf('MATLAB regression tests: %d checks passed.\n',checks);

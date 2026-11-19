@@ -29,7 +29,9 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % cfg.std.mode = 'pseudo_degree';
 
 % Default uncertainty policy (customize these only when needed):
-% cfg.std.mode = 'auto'; % exact for small components, otherwise per-event Hutch/repair
+% If many Hutch estimates miss the target, try Cholesky before increasing probes.
+% cfg.std.auto_probe = 'cholesky'; % Optional. Use squared draws on larger groups. Default is 'hutch'.
+% cfg.std.mode = 'auto'; % exact for small components, otherwise the sampler in auto_probe
 % cfg.std.fallback = 'pseudo_degree'; % only unresolved entries; graph_bound is opt-in
 % cfg.std.exact_max_nred = 2048;
 % cfg.std.repair_max_nodes = 128; % selected full-system exact corrections
@@ -48,10 +50,12 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % cfg.output.theta_decimals = 12;
 % cfg.output.thetastd_decimals = 12;
 % Adaptive Hutchinson: maximum budget, early convergence checks, safe fallback.
-% cfg.std.hutch.probes = 4096;
+% Both samplers use these settings. Cholesky checks after 256 draws, then doubles
+% up to the maximum if any event still exceeds the sampling target.
+% cfg.std.hutch.probes = 4096; % Maximum draws per connected group.
 % cfg.std.hutch.min_probes = 128;
 % cfg.std.hutch.rel_tol = 0.10;
-% Read the four-category percentages and review advice in sync_metrics.txt.
+% Read the method percentages and review advice in sync_metrics.txt.
 % Component details are at the end; std_quality_*.txt identifies individual rows.
 % See ../docs/uncertainty.md for probe selection and fallback behavior.
 
