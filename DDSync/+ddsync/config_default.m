@@ -87,7 +87,7 @@ cfg.std.write_weight_column     = true;
 cfg.std.write_alt_weight_column = false;
 
 % Hutchinson settings (used by 'hutch' and large components in 'auto')
-cfg.std.hutch.probes            = 2048;      % maximum; stop early when convergence checks pass
+cfg.std.hutch.probes            = 4096;      % maximum; stop early when convergence checks pass
 cfg.std.hutch.min_probes        = 128;
 cfg.std.hutch.rel_tol           = 0.10;      % max per-node MC standard error / diagonal
 cfg.std.hutch.probe_dist        = 'rademacher'; % 'rademacher'|'gaussian'

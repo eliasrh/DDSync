@@ -1,0 +1,104 @@
+# Reporting counts exported non-reference station-phase/event entries, not
+# components or unique catalog events. Exact includes selected exact repairs.
+const STD_REVIEW_THRESHOLD_PCT = 10.0
+
+function uncertaintyCounts(components)
+    exact = hutch = unconverged = fallback = disabled = 0
+    for c in components
+        exact += c.exact_nodes
+        hutch += c.hutch_converged
+        unconverged += c.unconverged_nodes
+        fallback += c.fallback_nodes
+        c.method in ("none", "disabled") && (disabled += c.nodes - 1)
+    end
+    total = exact + hutch + unconverged + fallback
+    review = unconverged + fallback
+    return (exact=exact, hutch=hutch, unconverged=unconverged, fallback=fallback,
+        total=total, review=review, disabled=disabled, references=length(components))
+end
+
+# Index once: scanning all components for every station is costly on DAS data.
+function uncertaintyByGroup(components)
+    grouped = Dict{String,Vector{NamedTuple}}()
+    for c in components
+        push!(get!(() -> NamedTuple[], grouped, c.group), c)
+    end
+    return Dict(group=>uncertaintyCounts(entries) for (group,entries) in grouped)
+end
+
+stdPercent(n, total) = total == 0 ? "N/A" : @sprintf("%.2f%%",100.0*n/total)
+stdCountPercent(n,total) = @sprintf("%d (%s)",n,stdPercent(n,total))
+needsStdReview(c) = c.total > 0 && 100.0*c.review/c.total >= STD_REVIEW_THRESHOLD_PCT
+
+function writeUncertaintySummary(io, components; prefix="# ")
+    c = uncertaintyCounts(components)
+    println(io,prefix,"UNCERTAINTY SUMMARY")
+    println(io,prefix,"Denominator: ",c.total," supported non-reference std entries (station-phase/event rows).")
+    println(io,prefix,"Excluded: ",c.references," gauge references; ",c.disabled," disabled entries; rejected/absent events.")
+    @printf(io,"%s%-30s %12s %12s\n",prefix,"Category","Count","Percent")
+    for (label,n) in (("Exact (including repairs)",c.exact),("Converged Hutch",c.hutch),
+                      ("Kept unconverged Hutch",c.unconverged),("Fallback / proxy",c.fallback))
+        @printf(io,"%s%-30s %12d %12s\n",prefix,label,n,stdPercent(n,c.total))
+    end
+    println(io,prefix,"Requires review (kept unconverged + fallback/proxy): ",stdCountPercent(c.review,c.total))
+    println(io,prefix,"Numerically checked (exact + converged Hutch): ",stdCountPercent(c.exact+c.hutch,c.total))
+    println(io,prefix,"Fallback/proxy includes explicitly requested proxies/bounds. Checked does not mean physically calibrated.")
+    if c.total == 0
+        println(io,prefix,"No assessed std entries; percentages are N/A. Enable uncertainty if required by the application.")
+    elseif needsStdReview(c)
+        println(io,prefix,"ADVICE: At least 10% require review. Increase std.probes and/or std.repair_max_nodes;")
+        println(io,prefix,"        consider std.exact_max_nred for affordable full exact calculation. Inspect std_quality_*.txt.")
+        println(io,prefix,"        For skipped/failed solves, inspect the reason; for explicit proxies, select auto/hutch first.")
+    else
+        println(io,prefix,"Below the 10% review advisory threshold. Inspect flagged entries and group summaries before weighting.")
+    end
+    println(io,prefix,"Unconverged Hutch entries with relative MC SE >= 1, invalid estimates or too few probes cannot be kept;")
+    println(io,prefix,"after selected repairs these entries use fallback. They are included in the fallback/proxy counts above.")
+    return c
+end
+
+function writeMetricsReport(io, groups, components, overall)
+    println(io)
+    writeUncertaintySummary(io, components)
+    println(io,"# sigma_hat: raw final residual-noise scale in seconds; each group reports the median of component scales.")
+    println(io,"# sigma_std: component sigma_hat after the optional min_sigma floor; this is sigma in the std formulas.")
+    println(io,"# Neither scale is a theta std or a Monte Carlo error. pseudo_weight does not use sigma_std.")
+    width = max(16, isempty(groups) ? 0 : maximum(length(g.group) for g in groups))
+    println(io,"\n# STATION-PHASE OBSERVATIONS")
+    @printf(io,"%-*s %10s %10s %11s %12s %12s %12s %20s %13s\n",width,"group",
+        "n_edges","n_kept","pruned_pct","robust_p50","robust_p05","robust_p95","frac_robust_lt_0p99","sigma_hat")
+    for g in groups
+        @printf(io,"%-*s %10d %10d %11.3f %12.4f %12.4f %12.4f %20.3f %13.6g\n",width,g.group,
+            g.n_edges,g.n_kept,g.pruned_pct,g.r50,g.r05,g.r95,g.frac_dw,g.sigma_hat)
+    end
+    println(io,"\n# OVERALL")
+    @printf(io,"overall_edges=%d\noverall_kept=%d\noverall_pruned_pct=%.3f\npseudo_groups_used=%d\npseudo_components_used=%d\n",
+        overall.edges,overall.kept,overall.pruned_pct,overall.pseudo_groups,overall.pseudo_components)
+    by_group = uncertaintyByGroup(components)
+    empty_counts = uncertaintyCounts(())
+    println(io,"\n# UNCERTAINTY BY GROUP (counts and percentages use each group's assessed std entries)")
+    @printf(io,"# %-*s %8s %18s %18s %18s %18s %12s %10s\n",width,"group","n_std",
+        "exact","hutch_converged","hutch_unconverged","fallback/proxy","review_pct","disabled")
+    for g in groups
+        c = get(by_group,g.group,empty_counts)
+        @printf(io,"# %-*s %8d %18s %18s %18s %18s %12s %10d\n",width,g.group,c.total,
+            stdCountPercent(c.exact,c.total),stdCountPercent(c.hutch,c.total),stdCountPercent(c.unconverged,c.total),
+            stdCountPercent(c.fallback,c.total),stdPercent(c.review,c.total),c.disabled)
+    end
+    flagged = [g.group for g in groups if needsStdReview(get(by_group,g.group,empty_counts))]
+    if !isempty(flagged)
+        println(io,"# GROUP ADVICE: At least 10% require review in each group below, even if the overall share is small.")
+        println(io,"# Increase std.probes and/or std.repair_max_nodes, or std.exact_max_nred where affordable;")
+        println(io,"# inspect skip/solve reasons and explicit proxy settings before rerunning.")
+        for group in flagged;println(io,"#   ",group);end
+    end
+    println(io,"\n# COMPONENT DETAILS (all methods, including converged Hutch)")
+    println(io,"# max_rel_se is the pre-repair diagnostic, not the error of exact repairs; scales are seconds.")
+    for c in components
+        @printf(io,"# std_component group=%s ref=%d nodes=%d method=%s\n",c.group,c.ref,c.nodes,c.method)
+        @printf(io,"#   reason=%s probes=%d max_rel_se=%.6g\n",c.reason,c.probes,c.max_rel_se)
+        @printf(io,"#   sigma_hat=%.6g sigma_std=%.6g repair_attempted=%d repaired_nodes=%d\n",c.sigma_hat,c.sigma_std,c.repair_attempted,c.repaired_nodes)
+        @printf(io,"#   exact_nodes=%d hutch_converged=%d unconverged_nodes=%d fallback_nodes=%d\n\n",
+            c.exact_nodes,c.hutch_converged,c.unconverged_nodes,c.fallback_nodes)
+    end
+end

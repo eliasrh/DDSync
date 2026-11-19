@@ -28,10 +28,12 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % cfg.std.repair_max_nodes = 128;
 % cfg.std.unconverged = 'keep'; % retain positive unresolved estimates with relative MC SE < 1
 % cfg.std.fallback = 'pseudo_degree'; % practical proxy, not calibrated uncertainty
-% cfg.std.hutch.probes = 2048;
+% cfg.std.hutch.probes = 4096;
 % cfg.std.hutch.min_probes = 128;
 % cfg.std.hutch.rel_tol = 0.10;
-% Read std_quality_*.txt and # std_component diagnostics before using uncertainties.
+% Read the four-category percentages and review advice in sync_metrics.txt.
+% Unrepaired relative MC SE >= 1 uses fallback and contributes to the review share.
+% Component details are at the end; std_quality_*.txt identifies individual rows.
 % See ../docs/uncertainty.md for probe selection and fallback behavior.
 
 

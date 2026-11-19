@@ -23,7 +23,7 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % OUTPUT_WEIGHT_MODE
 % cfg.output.dt_weight_mode = 'thetaStd';
 % STD_PROBES is now a maximum budget; convergence is checked automatically.
-% cfg.std.hutch.probes = 2048;
+% cfg.std.hutch.probes = 4096;
 % cfg.std.hutch.min_probes = 128;
 % cfg.std.hutch.rel_tol = 0.10;
 % cfg.std.fallback = 'pseudo_degree';

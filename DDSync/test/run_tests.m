@@ -80,6 +80,12 @@ cfg.std.write_weight_column=false;cfg.std.write_alt_weight_column=true;
 evalc('ddsync.run(cfg);');
 sd=readmatrix(fullfile(cfg.io.thetastd_dir,'std_theta_TEST_P.txt'));
 check(size(sd,2)==5);check(all(abs(sd(1:20,5)-0.9)<1e-6));
+cfg=split_config(fullfile(output_root,'no_floor'));cfg.std.min_sigma=[];
+evalc('ddsync.run(cfg);');
+metrics=fileread(cfg.io.metrics_file);
+check(contains(metrics,'STD_MIN_SIGMA=[] STD_APPLY_MIN_SIGMA=0'));
+scales=regexp(metrics,'sigma_hat=(\S+) sigma_std=(\S+)','tokens');
+check(numel(scales)==4 && all(cellfun(@(x)strcmp(x{1},x{2}),scales)));
 cfg=split_config(fullfile(output_root,'no_export'));cfg.std.export=false;cfg.output.dt_weight_mode='combined';
 evalc('ddsync.run(cfg);');
 check(~isfolder(cfg.io.thetastd_dir));check(~isempty(fileread(cfg.io.out_dt_sync)));
@@ -130,6 +136,7 @@ cfg=ddsync.config_default();cfg.std.hutch.batch=0;failed=false;
 try,ddsync.validate_std_config(cfg.std);catch,failed=true;end
 check(failed);
 checks=checks+per_event_tests();
+checks=checks+metrics_reporting_tests();
 fprintf('MATLAB regression tests: %d checks passed.\n',checks);
     function check(condition)
         assert(all(condition,'all'),'Regression check %d failed',checks+1);

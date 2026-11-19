@@ -72,7 +72,7 @@ STD_APPLY_MIN_SIGMA = cfg.std.apply_min_sigma && ~isempty(STD_MIN_SIGMA) && (STD
 STD_MIN_DIAGREL = cfg.std.hutch.min_diagrel;
 
 % Pseudo std / fallback behavior
-THETASTD_MODE            = cfg.std.mode;      % 'hutch'|'exact'|'graph_bound'|'pseudo_degree'|'pseudo_weight'|'none'
+THETASTD_MODE            = cfg.std.mode;      % 'auto'|'hutch'|'exact'|'graph_bound'|'pseudo_degree'|'pseudo_weight'|'none'
 THETASTD_FALLBACK        = cfg.std.fallback;  % skipped/unreliable Hutch: 'exact'|'graph_bound'|'pseudo_degree'|'pseudo_weight'
 PSEUDO_WEIGHT_SOURCE     = cfg.std.pseudo_weight_source; % 'combined'|'robust'|'base'
 PSEUDO_WEIGHT_EPS        = cfg.std.pseudo_weight_eps;
@@ -125,7 +125,9 @@ fprintf(fidm,'# K_SIGMA=%g MIN_EDGES=%d IRLS_ITERS=%d C_HUBER=%g MODE=%s STD_EXP
 fprintf(fidm,'# STD_MIN_PROBES=%d STD_REL_TOL=%g STD_BATCH=%d STD_FALLBACK=%s STD_EXACT_MAX_NRED=%d\n', ...
     cfg.std.hutch.min_probes, cfg.std.hutch.rel_tol, STD_BATCH, THETASTD_FALLBACK, cfg.std.exact_max_nred);
 fprintf(fidm,'# STD_REPAIR_MAX_NODES=%d STD_UNCONVERGED=%s\n',cfg.std.repair_max_nodes,cfg.std.unconverged);
-fprintf(fidm,'group\tn_edges\tn_kept\tpruned_pct\trobust_p50\trobust_p05\trobust_p95\tfrac_robust_lt_0p99\tsigma_hat\n');
+if isempty(STD_MIN_SIGMA),min_sigma_text='[]';else,min_sigma_text=sprintf('%.6g',STD_MIN_SIGMA);end
+fprintf(fidm,'# STD_MIN_SIGMA=%s STD_APPLY_MIN_SIGMA=%d\n',min_sigma_text,STD_APPLY_MIN_SIGMA);
+metric_groups=struct([]);metric_components=struct([]);
 
 for g=1:nGroups
     key = groupKeys{g};
@@ -159,14 +161,10 @@ for g=1:nGroups
         nPseudoComps  = nPseudoComps + pseudo_info.n_pseudo_comps;
     end
 
-    for d = pseudo_info.components
-        fprintf(fidm,'# std_component group=%s ref=%d nodes=%d method=%s reason=%s probes=%d max_rel_se=%.6g hutch_converged=%d exact_nodes=%d repair_attempted=%d repaired_nodes=%d unconverged_nodes=%d fallback_nodes=%d\n', ...
-            key, d.ref, d.nodes, d.method, d.reason, d.probes, d.max_rel_se, ...
-            d.hutch_converged,d.exact_nodes,d.repair_attempted,d.repaired_nodes,d.unconverged_nodes,d.fallback_nodes);
-        if ~ismember(d.reason, {'converged','requested'})
-            fprintf('  [STD] ref=%d: %s; method=%s, probes=%d, max_rel_se=%.3g\n', ...
-                d.ref, d.reason, d.method, d.probes, d.max_rel_se);
-        end
+    for d=pseudo_info.components
+        % Buffer only compact diagnostics; per-event arrays are written separately.
+        d=rmfield(d,{'event_ids','node_methods','node_rel_se'});d.group=key;
+        if isempty(metric_components),metric_components=d;else,metric_components(end+1)=d;end
     end
     n_kept = sum(keep_mask);
     overall_kept = overall_kept + n_kept;
@@ -208,27 +206,20 @@ for g=1:nGroups
         r50=NaN; r05=NaN; r95=NaN; frac_dw=NaN;
     end
 
-    % write to metrics file (tab-delimited)
-    fprintf(fidm,'%s\t%d\t%d\t%.3f\t%.4f\t%.4f\t%.4f\t%.3f\t%.6g\n', ...
-        key, n_edges, n_kept, pruned_pct, r50, r05, r95, frac_dw, sigma_hat);
+    entry=struct('group',key,'n_edges',n_edges,'n_kept',n_kept,'pruned_pct',pruned_pct, ...
+        'r50',r50,'r05',r05,'r95',r95,'frac_dw',frac_dw,'sigma_hat',sigma_hat);
+    if isempty(metric_groups),metric_groups=entry;else,metric_groups(end+1)=entry;end
 
     fprintf('  kept=%d (%.2f%% pruned), sigma_hat=%.4g s, robust_w p05/p50/p95=%.3g/%.3g/%.3g\n', ...
         n_kept, pruned_pct, sigma_hat, r05, r50, r95);
 end
 
-% ---------- overall summary ----------
-fprintf(fidm,'\n# OVERALL\n');
-fprintf(fidm,'overall_edges=%d\n', overall_edges);
-fprintf(fidm,'overall_kept=%d\n', overall_kept);
-fprintf(fidm,'overall_pruned_pct=%.3f\n', 100*(overall_edges-overall_kept)/max(overall_edges,1));
-fprintf(fidm,'pseudo_groups_used=%d\n', nPseudoGroups);
-fprintf(fidm,'pseudo_components_used=%d\n', nPseudoComps);
+% ---------- report: summary first, component details last ----------
+overall=struct('edges',overall_edges,'kept',overall_kept,'pseudo_groups',nPseudoGroups,'pseudo_components',nPseudoComps);
+ddsync.write_metrics_report(fidm,metric_groups,metric_components,overall);
 fclose(fidm);
-
-if nPseudoGroups>0
-    fprintf('\n[THETASTD] Pseudo std/weights were used in %d/%d groups (components=%d). See %s.\n', ...
-        nPseudoGroups, nGroups, nPseudoComps, metrics_file);
-end
+fprintf('\n');ddsync.write_uncertainty_summary(1,ddsync.uncertainty_summary(metric_components),'');
+fprintf('Full group/component report: %s\n',metrics_file);
 
 % ---------- STEP 3: optional median scaling for thetaStd weights ----------
 thetaStdScale = THETASTD_SCALE_FIXED;
@@ -686,6 +677,7 @@ function [theta_full, ref_full, keep_mask, wrob_full, sigma_hat_global, std_full
             pseudo_info.used_pseudo=true;pseudo_info.n_pseudo_comps=pseudo_info.n_pseudo_comps+1;
         end
         info.ref=ev_all(nodes_c(pin));info.nodes=n_c;info.event_ids=ev_all(nodes_c);
+        info.sigma_hat=sigma_hat;info.sigma_std=sigmaForThetaStd(sigma_hat,STD_MIN_SIGMA,STD_APPLY_MIN_SIGMA);
         if isempty(pseudo_info.components),pseudo_info.components=info;
         else,pseudo_info.components(end+1)=info;end
         theta_local(nodes_c)=theta_c; ref_local(nodes_c)=ev_all(nodes_c(pin));

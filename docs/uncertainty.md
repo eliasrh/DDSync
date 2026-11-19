@@ -16,14 +16,23 @@ Let `Lred` be the weighted graph Laplacian after removing the reference row and 
 std_theta = sigma_std * sqrt(diag(inv(Lred)))
 ```
 
-`sigma_std` is the component's final residual-noise scale, optionally floored by `min_sigma`. Exact calculation removes Monte Carlo sampling error from the inverse-diagonal calculation. It does not remove floating-point error, ridge bias, uncertainty in the noise scale, pruning effects or physical model error. Correlation coefficients used as relative weights are not necessarily calibrated inverse observation variances.
+`sigma_hat` is the component's **raw final robust residual-noise estimate**, in seconds. `sigma_std` is the scale used in the uncertainty calculation after the optional `min_sigma` floor:
+
+```text
+sigma_std = max(sigma_hat, min_sigma)   # when the positive floor is enabled
+sigma_std = sigma_hat                   # when the floor is disabled
+```
+
+The shorter `sigma` used in descriptions such as `sigma / sqrt(degree)` means `sigma_std`; it is not a different fitted noise parameter. Neither value is an event's standard deviation or the standard error of Hutchinson sampling. The report lists both scales per component. In the observation table, `sigma_hat` is the median of the raw component scales in that station-phase group, solely for reporting. Each component still uses its own scale. The `pseudo_weight` formula does not use either scale.
+
+Exact calculation removes Monte Carlo sampling error from the inverse-diagonal calculation. It does not remove floating-point error, ridge bias, uncertainty in the noise scale, pruning effects or physical model error. Correlation coefficients used as relative weights are not necessarily calibrated inverse observation variances.
 
 Hutchinson uses random vectors `z`, solves `Lred*x = z`, and averages `x .* z`. Individual samples and finite-sample averages can be negative even though the true inverse diagonal is positive. Negative estimates are never replaced with a tiny positive variance.
 
 ## Default decision sequence
 
 1. **Small component:** `mode="auto"` computes the exact diagonal directly when there are at most `exact_max_nred=2048` unpinned events. It spends no random probes first.
-2. **Larger component:** sample up to `probes=2048`, checking after batches of 128 and at least `min_probes=128` samples. Sampling stops early if every entry passes. At the end, preserve every entry whose estimated Monte Carlo standard error divided by its estimated diagonal is at most `rel_tol=0.10`.
+2. **Larger component:** sample up to `probes=4096`, checking after batches of 128 and at least `min_probes=128` samples. Sampling stops early if every entry passes. At the end, preserve every entry whose estimated Monte Carlo standard error divided by its estimated diagonal is at most `rel_tol=0.10`.
 3. **Selected exact repair:** solve for up to `repair_max_nodes=128` failed entries, prioritizing invalid estimates, then the largest relative sampling errors. Reuse the factorization already used by Hutchinson. This limit counts extra right-hand sides, independently of component size.
 4. **Remaining positive estimates:** with `unconverged="keep"`, retain entries with sufficient samples and finite positive estimates whose relative MC standard error is below 1. They are labeled `hutch_unconverged`, **not converged**. The cutoff excludes near-zero estimates whose standard error is as large as the estimate; it is not a confidence guarantee. Use `unconverged="fallback"` to send all unrepaired failing entries to fallback instead.
 5. **Remaining unusable entries:** use `fallback="pseudo_degree"`, a finite practical proxy `sigma_std / sqrt(degree)`. This also applies when sampling is disabled, exceeds `max_nred=40000`, or cannot obtain usable solves. Successful entries elsewhere in the component are preserved.
@@ -60,7 +69,7 @@ Julia TOML:
 [std]
 mode = "auto"
 exact_max_nred = 2048
-probes = 2048
+probes = 4096
 min_probes = 128
 batch = 128
 rel_tol = 0.10
@@ -75,7 +84,7 @@ MATLAB:
 cfg = ddsync.config_default();
 cfg.std.mode = 'auto';
 cfg.std.exact_max_nred = 2048;
-cfg.std.hutch.probes = 2048;
+cfg.std.hutch.probes = 4096;
 cfg.std.hutch.min_probes = 128;
 cfg.std.hutch.batch = 128;
 cfg.std.hutch.rel_tol = 0.10;
@@ -86,7 +95,7 @@ cfg.std.fallback = 'pseudo_degree';
 
 Use `mode="hutch"` to request sampling even on a small component, `mode="exact"` for deterministic calculation up to the full exact size cap, or `mode="auto"` for the default selection. Explicit exact mode above the cap uses fallback; increase the cap if that calculation is intended and its cost is acceptable. `repair_max_nodes=0` disables selected repairs. A probe budget below `min_probes` can still be repaired exactly; it cannot produce accepted or retained stochastic values.
 
-Existing configurations retain explicit settings. To adopt the new selection and fallback, change `mode` to `auto` and `fallback` to `pseudo_degree`; new repair/retention fields are supplied by defaults. Explicit `fallback="graph_bound"` remains graph-bound fallback. Existing files with `mode="hutch"` still sample small components. Explicit old large probe budgets remain in effect.
+Existing configurations retain explicit settings. To adopt the new selection and fallback, change `mode` to `auto` and `fallback` to `pseudo_degree`; new repair/retention fields are supplied by defaults. Explicit `fallback="graph_bound"` remains graph-bound fallback. Existing files with `mode="hutch"` still sample small components. Explicit old probe budgets remain in effect, including `probes=2048`. To adopt the new maximum, change it to 4096 or remove the explicit override. The full exact cap stays at 2048 unpinned events and the selected-repair budget stays at 128.
 
 ## Reading per-event quality and component diagnostics
 
@@ -100,26 +109,48 @@ IDs follow the corresponding theta file, including Julia's sequential mapping. R
 
 `relative_mc_se` is the pre-repair relative sampling diagnostic. Thus an `exact` repair can carry a large value or `Inf` from the failed stochastic attempt; that value does not describe the accuracy of the repaired std. `NaN` means no sampling diagnostic was taken. These diagnostic missing values are **not** uncertainty values passed to GraphSplit.
 
-Each `# std_component` metrics line includes:
+### Read the percentages first
+
+`sync_metrics.txt` reports the following four categories globally and by station-phase group. The terminal prints the final global breakdown too, even if every Hutch estimate converged.
+
+| Category | Included values |
+| --- | --- |
+| Exact | Full exact calculation and successful selected exact repairs. |
+| Converged Hutch | Stochastic entries that passed the configured per-entry diagnostic. |
+| Kept unconverged Hutch | Positive stochastic entries retained without passing that diagnostic. |
+| Fallback/proxy | Degree or weight proxies and explicitly selected graph bounds, including when directly requested. |
+
+Percentages use the **number of supported non-reference std entries** as their denominator. One event observed at several station-phase groups contributes once in each file. They are not percentages of unique catalog events or of components, and are not averages of component percentages. Gauge references, rejected/isolated rows and deliberately disabled uncertainty are excluded. Disabled entries are counted separately. With no assessed entries, percentages are `N/A`, not a claim of zero uncertainty problems.
+
+The **requires-review share** is the sum of kept unconverged Hutch and fallback/proxy percentages. It shows which rows lack an exact or converged stochastic diagonal; it is not a measured fraction of physically incorrect uncertainties. Conversely, exact plus converged Hutch is the numerically checked share, not proof of calibrated physical uncertainty.
+
+At **10% or more requiring review**, DDSync advises raising probes and/or `repair_max_nodes`, or using a larger full exact cap when practical. The same check applies to each group, so a small poorly estimated group is visible even if the global share is low. This operational 10% threshold is separate from `rel_tol=0.10`, which tests each variance estimate's relative Monte Carlo standard error. More probes cannot fix an invalid noise scale, disabled sampling or a size limit; inspect the component reasons as well.
+
+The relative-MC-SE cutoff at **1** is still active: an unrepaired entry with SE as large as or larger than its estimate is assigned fallback instead of being kept. Its replacement is now visible in the fallback count and review percentage. The 4096-probe default reduces sampling noise but does not guarantee that this cutoff or the convergence tolerance will be met.
+
+### Component details at the end
+
+The observation table uses aligned whitespace-separated columns. Component details are grouped separately at the end of the report and include successful convergence as well as failures. Each record starts with `# std_component`; its fields continue on following comment lines. Parsers must no longer assume all fields occur on the opening line. Each record includes:
 
 | Field | Meaning |
 | --- | --- |
 | `method` | Actual method, or `hybrid` when different events use different methods. |
 | `reason` | Sampling outcome (`converged`, `not_converged`, `nonpositive_estimate`, `nonfinite_estimate`, `insufficient_probes`, `solve_failed`), a skip reason (`disabled_probes`, `size_limit`, `exact_size_limit`), `exact_failed`, or `requested`. It describes the attempt, before repairs. |
 | `probes`, `max_rel_se` | Actual sampling count and worst pre-repair relative MC standard error. |
+| `sigma_hat`, `sigma_std` | Raw residual-noise scale and the optionally floored scale used in uncertainty formulas, both in seconds. |
 | `hutch_converged` | Number of preserved converged stochastic entries. |
 | `exact_nodes` | Number supplied by full or selected exact calculation. |
 | `repair_attempted`, `repaired_nodes` | Selected solves attempted and successfully used. |
 | `unconverged_nodes` | Retained positive stochastic estimates that failed the requested tolerance. |
 | `fallback_nodes` | Entries supplied by a degree/weight proxy or an explicitly selected graph bound. |
 
-The reference is excluded from these counts. `hutch_converged + exact_nodes + unconverged_nodes + fallback_nodes` equals the number of unpinned events when uncertainty is enabled. `pseudo_components_used` counts components using at least one proxy entry. The group-table `sigma_hat` is only a reporting median across final components; each component uses its own scale.
+`repaired_nodes` is a subset of `exact_nodes`, not an additional category. The reference is excluded from these counts. `hutch_converged + exact_nodes + unconverged_nodes + fallback_nodes` equals the number of unpinned events when uncertainty is enabled. `pseudo_components_used` counts components using at least one proxy entry. The group-table `sigma_hat` is only a reporting median across final components; each component uses its own scale.
 
 ## Choosing budgets and using the exports
 
-Start with `auto`. Inspect `unconverged_nodes`, `fallback_nodes` and the quality files, rather than requiring the worst pre-repair diagnostic to pass. If only a few entries are problematic, raise `repair_max_nodes` enough to repair them. If a large fraction fails, more probes or a larger exact calculation may be more useful than a small repair budget. A 128-probe exploratory run can be adequate on favorable graphs, but is not a universal recommendation. Do not loosen `rel_tol` merely to rename noisy entries as converged.
+Start with `auto` and the 4096-probe maximum. Read the global and group review percentages, then inspect `unconverged_nodes`, `fallback_nodes`, component reasons and the quality files, rather than requiring the worst pre-repair diagnostic to pass. If only a few entries are problematic, raise `repair_max_nodes` enough to repair them. If a large fraction fails, more probes or a larger exact calculation may be more useful than a small repair budget. A 128-probe exploratory run can be adequate on favorable graphs, but is not a universal recommendation. Do not loosen `rel_tol` merely to rename noisy entries as converged.
 
-For final analyses, compare representative components across independent seeds or against exact diagonals. The [November synthetic study](updates/2026-11-12-per-event-uncertainty.md) includes 2,400–5,000-event components, both language implementations, error distributions and failure modes. Even retained positive estimates on a large dense graph can have sizable errors at 2048 probes.
+For final analyses, compare representative components across independent seeds or against exact diagonals. The [November synthetic study](updates/2026-11-12-per-event-uncertainty.md) includes 2,400–5,000-event components, both language implementations, error distributions and failure modes. That study used 2048 probes, the default at the time; its measurements have not been relabeled as 4096-probe results. It showed that retained positive estimates on a large dense graph can have sizable errors. See the [19 November reporting update](updates/2026-11-19-uncertainty-reporting.md) for the current summary layout and default.
 
 For reproducibility, use Julia's `Random.seed!(1234)` before `DDSync.run(cfg)`, or MATLAB's `rng(1234)` before `ddsync.run(cfg)`. The two languages do not share random streams. Exact calculations provide the basis for cross-language equality checks.
 

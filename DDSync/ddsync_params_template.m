@@ -44,10 +44,11 @@ cfg.io.metrics_file = 'sync_metrics.txt';
 % cfg.output.theta_decimals = 12;
 % cfg.output.thetastd_decimals = 12;
 % Adaptive Hutchinson: maximum budget, early convergence checks, safe fallback.
-% cfg.std.hutch.probes = 2048;
+% cfg.std.hutch.probes = 4096;
 % cfg.std.hutch.min_probes = 128;
 % cfg.std.hutch.rel_tol = 0.10;
-% Read # std_component diagnostics in sync_metrics.txt before using uncertainties.
+% Read the four-category percentages and review advice in sync_metrics.txt.
+% Component details are at the end; std_quality_*.txt identifies individual rows.
 % See ../docs/uncertainty.md for probe selection and fallback behavior.
 
 

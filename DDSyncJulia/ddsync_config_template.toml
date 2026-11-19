@@ -66,10 +66,12 @@ unconverged = "keep"            # keep positive unresolved estimates with relati
 # Maximum stochastic budget; successful entries survive failures elsewhere.
 # At the budget limit, repair invalid or unconverged entries individually.
 # Negative/nonfinite or near-zero noisy estimates are never clipped to a floor.
-# Inspect std_quality_*.txt and per-component method counts in sync_metrics.txt.
+# Read the four-category percentages and review advice in sync_metrics.txt.
+# Unrepaired relative MC SE >= 1 still uses fallback; this is counted explicitly.
+# Component details are at the end; std_quality_*.txt identifies individual rows.
 # See ../docs/uncertainty.md. In auto mode, small components use no probes.
 # probes=0 skips Hutch; fallback applies (exact fallback still respects its cap).
-probes = 2048
+probes = 4096
 min_probes = 128
 rel_tol = 0.10                  # MC SE / diagonal; not a guaranteed relative error bound
 probe_dist = "rademacher"       # "rademacher" | "gaussian"

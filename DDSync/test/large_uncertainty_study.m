@@ -12,7 +12,7 @@ for graph={'mostly_good5000','weak_bridge5000','dense2400'}
     oracle=sqrt(ddsync.selected_inverse_diagonal(L,R,1:n-1,128));assert(all(isfinite(oracle)));
     if strcmp(name,'dense2400'),assert(max(abs(oracle/sqrt(2/n)-1))<1e-6);end
     bound=ddsync.graph_bound_std(n,a,b,w,1,1);br=bound(free)./oracle;
-    cfg=ddsync.config_default();opts=cfg.std.hutch;opts.mode='hutch';opts.fallback='pseudo_degree';
+    cfg=ddsync.config_default();opts=cfg.std.hutch;opts.probes=2048;opts.mode='hutch';opts.fallback='pseudo_degree';
     opts.exact_max_nred=2048;opts.repair_max_nodes=128;opts.report_every_batch=0;
     for seed=1:3
         for policy={'keep','fallback'}

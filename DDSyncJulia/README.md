@@ -1,6 +1,6 @@
 # DDSync (Julia)
 
-Julia is the primary implementation. MATLAB receives bug fixes. See the [12 November 2026 update report](../docs/updates/2026-11-12-per-event-uncertainty.md) and the [uncertainty and probe guide](../docs/uncertainty.md).
+Julia is the primary implementation. MATLAB receives bug fixes. See the [19 November 2026 reporting update](../docs/updates/2026-11-19-uncertainty-reporting.md) and the [uncertainty and probe guide](../docs/uncertainty.md).
 
 DDSync reads a HypoDD/GrowClust-style `dt.cc` file, processes one station-phase group at a time, and writes a cleaned and synchronized differential-time file. For each station and phase, it estimates one relative arrival-time value, `theta`, for every event that can be constrained by the data. A kept observation between events `i` and `j` is then represented by `theta(i) - theta(j)`.
 
@@ -28,7 +28,7 @@ julia run_ddsync.jl ddsync_config.toml dt.cc catalog.txt
 
 The first command uses the bundled example. Replace those two input paths for your own data. Relative paths in TOML are resolved from your working directory, not the config file directory. Use separate output directories for each run; existing output files with matching names are overwritten and old group files are not automatically removed.
 
-The default `auto` mode uses exact calculation directly for at most 2048 unpinned events. Larger components use up to 2048 probes, retain converged entries, and repair up to 128 failing entries exactly. Remaining estimates are individually retained with a quality label or given degree fallback. For fast exploratory weighting on a large file, you can explicitly choose a degree proxy; it is not a statistical uncertainty:
+The default `auto` mode uses exact calculation directly for at most 2048 unpinned events. Larger components use up to 4096 probes, retain converged entries, and repair up to 128 failing entries exactly. Remaining estimates are individually retained with a quality label or given degree fallback. For fast exploratory weighting on a large file, you can explicitly choose a degree proxy; it is not a statistical uncertainty:
 
 ```toml
 [std]
@@ -202,19 +202,20 @@ EventID  std_theta  refEventID  degree  thetaWeight  nodeWeight
 
 ### `sync_metrics.txt`
 
-A tab-delimited summary. Each station-phase row has:
+A readable report with aligned, whitespace-separated station-phase columns. The report gives uncertainty counts and percentages, observation statistics, and group-level uncertainty summaries. Component details are collected separately at the end; they no longer interrupt the observation rows. The terminal also prints the final uncertainty summary, including successful Hutchinson estimates.
 
 ```text
 group    n_edges  n_kept  pruned_pct  robust_p50  robust_p05  robust_p95  frac_robust_lt_0p99  sigma_hat
 ```
 
-`group` is the station-phase key, `n_edges` is the number of input measurements, and `n_kept` is the number retained after component gating and pruning. `sigma_hat` is the final robust residual scale for reporting and for `std_theta` export. It is not the same thing as `std.min_sigma`.
+`group` is the station-phase key, `n_edges` is the number of input measurements, and `n_kept` is the number retained after component gating and pruning. The four uncertainty categories are **exact**, **converged Hutch**, **kept unconverged Hutch**, and **fallback/proxy**. Exact includes selected exact repairs; fallback includes explicitly selected degree/weight proxies or graph bounds. Counts and percentages describe supported non-reference std entries across station-phase files, not unique catalog events. Gauge references, rejected/isolated rows and deliberately disabled uncertainty are excluded; disabled entries are counted separately. Percentages are `N/A` if there are no assessed entries.
 
-The group `sigma_hat` is the median of the final component scales; each component uses its own scale for uncertainty. Additional `# std_component` comment lines identify the final reference, node count, actual method, fallback reason, probes used and worst relative Monte Carlo standard error. Ignore comment lines when reading the numeric group table. `method=hybrid` means different events used different methods. Counts distinguish converged, exact, retained unconverged and fallback entries; `std_quality_*.txt` identifies them individually. See the [diagnostic field guide](../docs/uncertainty.md#reading-per-event-quality-and-component-diagnostics).
+The **requires-review share** is kept unconverged Hutch plus fallback. At 10% or more, the report advises increasing probes and/or exact repairs, or considering a larger full exact cap. Groups receive their own advice so a poorly estimated small group cannot disappear inside a good global average. This reporting threshold is an operational prompt, not a statistical confidence bound. A large exact-plus-converged share is favorable; it does not itself trigger advice to increase sampling.
 
-Comment lines at the top also record the catalog event count, whether IDs
-were remapped, and the paths to any ID map and sequential outputs. Check
-these lines when choosing the catalog for a downstream relocation.
+All scale values are in seconds. Component `sigma_hat` is the raw final robust residual-noise estimate. `sigma_std` is the scale actually used in uncertainty formulas after the optional `min_sigma` floor: normally `max(sigma_hat, min_sigma)` when the floor is enabled, otherwise `sigma_hat`. The `sigma` in the degree-proxy formula means **`sigma_std`**, not a separate noise estimate. Neither scale is a particular event's std or the Monte Carlo sampling error. The group-table `sigma_hat` is the median of raw final component scales; each component uses its own scale. `pseudo_weight` does not use either scale.
+
+Component records begin with `# std_component` and continue on subsequent comment lines. They include successful methods as well as failures, both scale values, probes, the pre-repair diagnostic and method counts. `method=hybrid` means events used different methods. Use `std_quality_*.txt` to identify individual entries. Parsers should split the observation table on whitespace, and should not assume all component fields are on one line. See the [diagnostic field guide](../docs/uncertainty.md#reading-per-event-quality-and-component-diagnostics).
+
 
 ---
 
@@ -367,7 +368,7 @@ For `thetaStd`, DDSync uses `sqrt(std_theta_i^2 + std_theta_j^2)` and ignores co
 | `pseudo_weight_eps` | `1e-6` | Minimum node weight before inverting in `pseudo_weight` mode. Prevents division by zero. |
 | `thetastd_write_weightcol` | `true` | Add the practical `thetaWeight` column to `std_theta_*.txt`. |
 | `thetastd_write_alt_node_weightcol` | `false` | Add `nodeWeight` to `std_theta_*.txt`. If `thetastd_write_weightcol` is also true, this is the sixth column; otherwise it is the fifth. |
-| `probes` | `2048` | Maximum Hutchinson probe budget. Stops early if every node passes the diagnostic. Set `0` to use fallback directly. |
+| `probes` | `4096` | Maximum Hutchinson probe budget. Stops early if every node passes the diagnostic. Set `0` to use fallback directly. |
 | `min_probes` | `128` | Minimum samples before accepting convergence (at least 2). A smaller budget permits exact repair or fallback, but no accepted/retained stochastic values. |
 | `rel_tol` | `0.10` | Maximum empirical standard error divided by estimated diagonal, tested independently for each unpinned node. This is not a guaranteed relative error bound. |
 | `probe_dist` | `"rademacher"` | Random probe distribution: `"rademacher"` (`+1/-1`) or `"gaussian"`. |
@@ -384,11 +385,11 @@ Mode meanings:
 | `"hutch"` | Sample even small components. Preserve converged entries, repair selected failures, and retain or replace only remaining failing entries. |
 | `"exact"` | Unit-vector solves up to the full exact cap; no sampling noise. Beyond that limit use configured fallback (degree by default). |
 | `"graph_bound"` | Explicit, potentially very loose upper bound from tree path resistances. Never selected automatically by the defaults. |
-| `"pseudo_degree"` | Fast proxy: `std_theta ~= sigma/sqrt(degree)`. A weighting proxy, not a calibrated or conservative uncertainty. |
+| `"pseudo_degree"` | Fast proxy: `std_theta ~= sigma_std/sqrt(degree)`. A weighting proxy, not a calibrated or conservative uncertainty. |
 | `"pseudo_weight"` | Fast proxy based on incident edge weights, scaled by `thetastd_scale_fixed`. Ignores `min_sigma`. |
 | `"none"` | Do not compute finite standard deviations. If `std.export` is true, files are still written with `NaN` for non-reference events and `0` for each reference. |
 
-Each std file has a `std_quality_STA_PH.txt` companion listing supported event ID, reference ID, method and pre-repair relative MC standard error. Join by event ID; rows need not be globally sorted. Component metrics count converged, exact, retained unconverged and fallback entries. Existing numeric theta/std columns are unchanged. See the [November update](../docs/updates/2026-11-12-per-event-uncertainty.md).
+Each std file has a `std_quality_STA_PH.txt` companion listing supported event ID, reference ID, method and pre-repair relative MC standard error. Join by event ID; rows need not be globally sorted. Global and group metrics give counts and percentages for converged, exact, retained unconverged and fallback entries; detailed component records follow at the end. Existing numeric theta/std columns are unchanged. See the [November update](../docs/updates/2026-11-12-per-event-uncertainty.md).
 
 Hutchinson sampling error usually decreases like `1/sqrt(probes)`, with strong graph dependence. See the [shared uncertainty guide](../docs/uncertainty.md) for choosing a budget, checking convergence, and interpreting fallback.
 

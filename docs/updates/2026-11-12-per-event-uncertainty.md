@@ -1,5 +1,7 @@
 # Per-event uncertainty and selected exact repair — 12 November 2026
 
+**Historical defaults:** the [19 November reporting update](2026-11-19-uncertainty-reporting.md) raises the default maximum to 4096 probes and reorganizes metrics. The 2048-probe synthetic results below remain the actual measurements from this study. Selected-repair and fallback behavior is unchanged.
+
 The October graph bound was mathematically conservative but a poor default for practical weights. Its whole-component trigger also discarded useful Hutchinson estimates whenever even one entry failed the convergence check. This update replaces that policy in Julia and fixes the same behavior in MATLAB. Post-pruning references and graph membership are unchanged.
 
 ## What changed

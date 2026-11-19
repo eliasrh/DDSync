@@ -23,6 +23,7 @@ using Printf
 
 include("EventIDs.jl")
 include("Uncertainty.jl")
+include("Metrics.jl")
 
 # ---------------------------- Public API ----------------------------
 
@@ -85,7 +86,7 @@ function config_default()
         :export                           => true,
         :mode                             => "auto",          # exact for small components, otherwise per-event Hutch/repair
         :fallback                         => "pseudo_degree", # only entries still unusable after selected exact repair
-        :probes                           => 2048,           # maximum; stop early when diagnostics pass
+        :probes                           => 4096,           # maximum; stop early when diagnostics pass
         :min_probes                       => 128,
         :rel_tol                          => 0.10,           # maximum per-node MC standard error / diagonal
         :exact_max_nred                   => 2048,
@@ -247,7 +248,9 @@ function run(cfg::Dict{Symbol,Any}=config_default())
     @printf(fidm, "# STD_MIN_PROBES=%d STD_REL_TOL=%g STD_BATCH=%d STD_FALLBACK=%s STD_EXACT_MAX_NRED=%d\n",
         std_cfg[:min_probes], std_cfg[:rel_tol], STD_BATCH, THETASTD_FALLBACK, std_cfg[:exact_max_nred])
     @printf(fidm, "# STD_REPAIR_MAX_NODES=%d STD_UNCONVERGED=%s\n", std_cfg[:repair_max_nodes], std_cfg[:unconverged])
-    @printf(fidm, "group\tn_edges\tn_kept\tpruned_pct\trobust_p50\trobust_p05\trobust_p95\tfrac_robust_lt_0p99\tsigma_hat\n")
+    @printf(fidm, "# STD_MIN_SIGMA=%g STD_APPLY_MIN_SIGMA=%s\n",STD_MIN_SIGMA,string(STD_APPLY_MIN_SIGMA))
+    metrics_rows = NamedTuple[]
+    metric_components = NamedTuple[]
     flush(fidm)
 
     overall_edges = 0
@@ -300,13 +303,10 @@ function run(cfg::Dict{Symbol,Any}=config_default())
         )
 
         for info in pseudo_info.components
-            @printf(fidm, "# std_component group=%s ref=%d nodes=%d method=%s reason=%s probes=%d max_rel_se=%.6g hutch_converged=%d exact_nodes=%d repair_attempted=%d repaired_nodes=%d unconverged_nodes=%d fallback_nodes=%d\n",
-                key, info.ref, info.nodes, info.method, info.reason, info.probes, info.max_rel_se,
-                info.hutch_converged, info.exact_nodes, info.repair_attempted, info.repaired_nodes, info.unconverged_nodes, info.fallback_nodes)
-            if info.reason != "converged" && info.reason != "requested"
-                @printf("  [STD] ref=%d: %s; method=%s, probes=%d, max_rel_se=%.3g\n",
-                    info.ref, info.reason, info.method, info.probes, info.max_rel_se)
-            end
+            # Keep only scalar diagnostics; do not retain per-node arrays for reporting.
+            compact = (; (k=>getproperty(info,k) for k in propertynames(info)
+                if !(k in (:event_ids,:node_methods,:node_rel_se)))...)
+            push!(metric_components, merge(compact,(group=key,)))
         end
         n_kept = count(identity, keep_mask)
         overall_kept += n_kept
@@ -395,9 +395,8 @@ function run(cfg::Dict{Symbol,Any}=config_default())
             r50 = NaN; r05 = NaN; r95 = NaN; frac_dw = NaN
         end
 
-        @printf(fidm, "%s\t%d\t%d\t%.3f\t%.4f\t%.4f\t%.4f\t%.3f\t%.6g\n",
-            key, length(gd), n_kept, pruned_pct, r50, r05, r95, frac_dw, sigma_hat)
-        flush(fidm)
+        push!(metrics_rows,(group=key,n_edges=length(gd),n_kept=n_kept,pruned_pct=pruned_pct,
+            r50=r50,r05=r05,r95=r95,frac_dw=frac_dw,sigma_hat=sigma_hat))
 
         @printf("  kept=%d (%.2f%% pruned), sigma_hat=%.4g s, robust_w p05/p50/p95=%.3g/%.3g/%.3g\n",
             n_kept, pruned_pct, sigma_hat, r05, r50, r95)
@@ -405,13 +404,20 @@ function run(cfg::Dict{Symbol,Any}=config_default())
 
     overall_pruned_pct = 100.0 * (overall_edges - overall_kept) / max(overall_edges, 1)
 
-    @printf(fidm, "\n# OVERALL\n")
-    @printf(fidm, "overall_edges=%d\n", overall_edges)
-    @printf(fidm, "overall_kept=%d\n", overall_kept)
-    @printf(fidm, "overall_pruned_pct=%.3f\n", overall_pruned_pct)
-    @printf(fidm, "pseudo_groups_used=%d\n", nPseudoGroups)
-    @printf(fidm, "pseudo_components_used=%d\n", nPseudoComps)
+    writeMetricsReport(fidm,metrics_rows,metric_components,
+        (edges=overall_edges,kept=overall_kept,pruned_pct=overall_pruned_pct,
+         pseudo_groups=nPseudoGroups,pseudo_components=nPseudoComps))
     close(fidm)
+    println()
+    writeUncertaintySummary(stdout,metric_components;prefix="")
+    by_group=uncertaintyByGroup(metric_components)
+    for g in metrics_rows
+        c=get(by_group,g.group,uncertaintyCounts(()))
+        if needsStdReview(c)
+            @printf("[STD GROUP ADVICE] %s: %s require review; increase probes/repairs as appropriate. See %s.\n",
+                g.group,stdPercent(c.review,c.total),metrics_file)
+        end
+    end
 
     # Optional median scaling for thetaStd weights
     thetaStdScale = THETASTD_SCALE_FIXED
@@ -1151,7 +1157,8 @@ function processStationPhaseGroup(gi::Vector{Int}, gj::Vector{Int}, gd::Vector{F
         EXPORT_THETA_STD || (info=merge(info,(method="disabled",)))
         any(m->m in ("pseudo_degree","pseudo_weight"),info.node_methods) && (n_pseudo_comps+=1)
         ref=ev_all[nodes_c[pin]]
-        push!(diagnostics,merge(info,(ref=ref,nodes=n_c,event_ids=ev_all[nodes_c])))
+        push!(diagnostics,merge(info,(ref=ref,nodes=n_c,event_ids=ev_all[nodes_c],sigma_hat=sigma_hat,
+            sigma_std=sigmaForThetaStd(sigma_hat,STD_MIN_SIGMA,STD_APPLY_MIN_SIGMA))))
         theta_local[nodes_c] .= theta_c
         ref_local[nodes_c] .= Float64(ref)
         std_local[nodes_c] .= std_c

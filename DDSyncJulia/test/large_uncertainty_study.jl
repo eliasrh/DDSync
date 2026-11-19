@@ -30,7 +30,7 @@ function study()
     name=="dense2400" && @assert maximum(abs.(oracle[free]./sqrt(2/n).-1))<1e-6
     bound=DDSync.estimateThetaStdGraphBound(n,a,b,w,1,1.0)
     br=bound[free]./oracle[free]
-    base=DDSync.config_default()[:std];base[:report_every_batch]=0
+    base=DDSync.config_default()[:std];base[:report_every_batch]=0;base[:probes]=2048 # historical November 12 experiment
     for seed in 1:3, policy in ("keep","fallback")
         opts=(; (k=>v for (k,v) in base)...)
         opts=merge(opts,(mode="hutch",unconverged=policy))

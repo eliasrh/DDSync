@@ -11,6 +11,12 @@ The synchronization algorithm and its defaults are shared. Input-ID handling
 differs: Julia now maps arbitrary integer IDs automatically, while MATLAB
 still requires users to prepare compact positive IDs before running.
 
+## Update (19 November 2026): visible uncertainty quality
+
+`sync_metrics.txt` now gives counts and percentages for exact, converged Hutch, kept unconverged Hutch, and fallback std values, globally and by station-phase group. It advises further sampling or exact repairs when at least 10% require review. Observation columns are aligned, and component details are grouped at the end. The default maximum probe budget is now **4096**; explicit older settings remain in effect.
+
+The report also distinguishes raw residual scale `sigma_hat` from the optionally floored `sigma_std` used in uncertainty formulas. Read the [reporting update](docs/updates/2026-11-19-uncertainty-reporting.md) and [uncertainty guide](docs/uncertainty.md).
+
 ## Update (12 November 2026): preserve useful Hutchinson estimates
 
 Uncertainty decisions are now made per event. Small components use exact calculation directly; larger ones retain converged Hutchinson estimates and use selected full-system exact solves to repair troublesome entries. Remaining usable positive estimates can be retained with an explicit quality label. The default final fallback is `pseudo_degree`; graph bounds are now opt-in. Numeric theta/std file layouts are unchanged, and new `std_quality_*.txt` files identify each event's method.
@@ -58,7 +64,7 @@ A typical run writes:
 - `dt_sync.cc` - synchronized and optionally pruned differential-time file.
 - `theta/theta_<STA>_<PH>.txt` - one relative arrival-time value, `theta`, for each event in each station-phase group.
 - `thetastd/std_theta_<STA>_<PH>.txt` - standard-deviation or practical-weight metadata for each event.
-- `sync_metrics.txt` - per-group and overall diagnostics.
+- `sync_metrics.txt` - aligned observation statistics, uncertainty percentages and review advice, followed by component details.
 
 For a kept observation between events `i` and `j`, the synchronized differential time is `theta(i) - theta(j)`.
 
@@ -136,7 +142,9 @@ Disabling `std.apply_min_sigma` disables the exported `std_theta` residual-noise
 
 `min_sigma` does not say that every row in `std_theta_*.txt` must be at least `min_sigma`. It floors the residual-noise estimate before graph leverage or degree scaling. Individual rows can be smaller or larger, and the pinned reference event remains `0`.
 
-`pseudo_weight` mode does not use `sigma_hat`, so `min_sigma` does not affect `pseudo_weight` standard deviations.
+`sigma_hat` is the raw component residual-noise estimate; `sigma_std` is its optionally floored value used in the uncertainty formulas. The group-table `sigma_hat` is only a reporting median across components.
+
+`pseudo_weight` mode does not use `sigma_hat` or `sigma_std`, so `min_sigma` does not affect `pseudo_weight` standard deviations.
 
 ---
 
